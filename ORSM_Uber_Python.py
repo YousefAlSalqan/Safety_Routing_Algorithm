@@ -130,4 +130,76 @@ def biderictional_dijkstra(graph, start, goal):
     return full_path, best_cost, nodes_expanded
 
 
+#Contraction Hierarchies. This involves a preprocessing step to create a hierarchy of nodes, then an upward search on the contracted graph.
+#This is the part where we can the safety heursitic 
+
+def ch_preprocess(graph):
+    """
+     CH Preprocessing — contract nodes and add shortcuts.
+ 
+    Returns:
+        ch_graph: the graph with shortcuts added
+        importance: rank of each node (higher = more important)
+    """
+    ch_graph = {n:dict(neighbors) for n, neighbors in graphs.items()} 
+
+    nodes = list(ch_graph.keys()) 
+
+    importance = {}
+
+    for node in nodes: 
+        degree = len(ch_graph[node])
+        importance[node] = degree 
+
+    order = sorted(nodes, jey = lambda n:importance[n])
+
+    rank = {} 
+
+    for i, node in enumerate(order): 
+        rank[node] = i 
+
+    contracted = set() 
+    shortcuts_added = 0 
+
+    #I will need to have to a look at this to see how I might change this to add safety to the equation 
+    for node in order[:-2]: 
+        in_neighbors = [] 
+        out_neighbors = [] 
+
+        for other, weight in ch_graph[node].items(): 
+            if other not in contracted: 
+                out_neighbors.append((other, weight))
+        
+        for other in ch_graph: 
+            if other not in contracted and node in ch_graph[other]: 
+                in_neighbors.append((other, ch_graph[other][node]))
+
+        for u,w_in in in_neighbors: 
+            for v,w_out in out_neighbors: 
+                if u == v: 
+                    continue 
+
+                shortcut_cost = w_in +w_out 
+
+                existing = ch_graph.get(u,{}).get(v,float('inf')) 
+                if shortcut_cost < existing:
+                    #Add shortcut  
+                    if u not in ch_graph: 
+                        ch_graph[u] = {} 
+                    ch_graph[u][v] = shortcut_cost 
+                    if v not in ch_graph:
+                        ch_graph[v] = {} 
+                    ch_graph[v][u] = shortcut_cost 
+                    shortcuts_added += 1
+
+        contracted.add(node)
+
+    print(f"  [CH] Contracted {len(contracted)} nodes, added {shortcuts_added} shortcuts")
+    return ch_graph, rank
+
+
+
+
+
+
 
