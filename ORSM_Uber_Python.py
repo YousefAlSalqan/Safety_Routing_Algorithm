@@ -197,6 +197,174 @@ def ch_preprocess(graph):
     print(f"  [CH] Contracted {len(contracted)} nodes, added {shortcuts_added} shortcuts")
     return ch_graph, rank
 
+def ch_query(ch_graph, rank, start, goal): 
+    """
+    CH Query - bidirectional UPWARD search 
+
+    Forward search goes UP from start.
+    Backward search goes UP from goal.
+    They meet at the most important node on the shortest path.
+    """
+
+    forward_queue = [(0,start)]
+    forward_cost = {start:0}
+    forward_parent = {start: None}
+
+    backward_queue = [(0,goal)] 
+    backward_cost = {goal:0}
+    backward_parent = {goal: None}
+
+    best_cost = float('inf') 
+    meeting_node = None 
+    nodes_expanded = 0 
+
+    while forward_queue: 
+        cost, node = heapq.heappop(forward_queue) 
+        if cost > forward_cost.get(node, float('inf')): 
+            continue
+
+        nodes_expanded+=1 
+
+        if node in backward_cost:
+            total = cost + backward_cost[node]
+            if total < best_cost:
+                best_cost = total
+                meeting_node = node
+
+        
+        for neighbor, weight in ch_graph.get(node,{}).items(): 
+            if rank.get(neighbor,0) <= rank.get(node,0):
+                continue 
+
+            new_cost = cost + weight 
+
+            if new_cost < forward_cost.get(neighbor, float('inf')): 
+                forward_cost[neighbor] = new_cost
+                forward_parent[neighbor] = node 
+                heapq.heappush(forward_queue, (new_cost, neighbor))
+
+    
+    while backward_queue: 
+        cost,node = heapq.heappop(backward_queue) 
+        if cost > backward_cost.get(node, float('inf')): 
+            continue 
+        nodes_expanded += 1 
+
+        if node in forward_cost: 
+            total = cost + forward_cost[node]
+            if total < best_cost: 
+                best_cost = total 
+                meeting_node = node 
+
+        for neighbor, weight in ch_graph.get(node,{}).items(): 
+            if rank.get(neighbor,0) <= rank.get(node,0): 
+                continue
+            new_cost = cost + weight
+            if new_cost < backward_cost.get(neighbor, float('inf')): 
+                backward_cost[neighbor] = new_cost 
+                backward_parent[neighbor] = node 
+                heapq.heappush(backward_queue, (new_cost, neighbor))
+
+    if meeting_node is None:
+        return None, float('inf'), nodes_expanded
+    
+    forward_path = [] 
+    node = meeting_node 
+    while node is not None: 
+        forward_path.append(node) 
+        node = forward_parent(node)
+    forward_path.reverse()
+
+    backward_path = []
+    node = backward_parent.get(meeting_node)
+    while node is not None: 
+        backward_path.append(node) 
+        node = backward_parent.get(node)
+
+    full_path = forward_path + backward_path
+    return full_path, best_cost, nodes_expanded
+
+
+# ═══════════════════════════════════════════════════════════════
+# FOR COMPARISON: STANDARD DIJKSTRA
+# ═══════════════════════════════════════════════════════════════
+ 
+def dijkstra(graph, start, goal):
+    """Standard (unidirectional) Dijkstra for comparison."""
+    queue = [(0, start)]
+    costs = {start: 0}
+    parents = {start: None}
+    nodes_expanded = 0
+ 
+    while queue:
+        cost, node = heapq.heappop(queue)
+        if cost > costs.get(node, float('inf')):
+            continue
+        nodes_expanded += 1
+ 
+        if node == goal:
+            path = []
+            while node is not None:
+                path.append(node)
+                node = parents[node]
+            return path[::-1], cost, nodes_expanded
+ 
+        for neighbor, weight in graph[node].items():
+            new_cost = cost + weight
+            if new_cost < costs.get(neighbor, float('inf')):
+                costs[neighbor] = new_cost
+                parents[neighbor] = node
+                heapq.heappush(queue, (new_cost, neighbor))
+ 
+    return None, float('inf'), nodes_expanded
+ 
+ 
+# ═══════════════════════════════════════════════════════════════
+# TEST
+# ═══════════════════════════════════════════════════════════════
+ 
+if __name__ == "__main__":
+    # CS4006 Lecture 4 graph
+    graph = {
+        'A': {'B': 1, 'C': 7},
+        'B': {'A': 1, 'D': 9, 'E': 1},
+        'C': {'A': 7, 'E': 5},
+        'D': {'B': 9, 'E': 5, 'F': 2},
+        'E': {'B': 1, 'C': 5, 'D': 5, 'G': 3},
+        'F': {'D': 2, 'H': 5},
+        'G': {'E': 3, 'H': 5},
+        'H': {'F': 5, 'G': 5},
+    }
+ 
+    print("=" * 55)
+    print("COMPARING OSRM'S ALGORITHMS (A → H)")
+    print("=" * 55)
+ 
+    # 1. Standard Dijkstra
+    path, cost, expanded = dijkstra(graph, 'A', 'H')
+    print(f"\n1. Standard Dijkstra:")
+    print(f"   Path: {' → '.join(path)}")
+    print(f"   Cost: {cost}, Nodes expanded: {expanded}")
+ 
+    # 2. Bidirectional Dijkstra (OSRM's core)
+    path, cost, expanded = bidirectional_dijkstra(graph, 'A', 'H')
+    print(f"\n2. Bidirectional Dijkstra (OSRM style):")
+    print(f"   Path: {' → '.join(path)}")
+    print(f"   Cost: {cost}, Nodes expanded: {expanded}")
+ 
+    # 3. Contraction Hierarchies
+    print(f"\n3. Contraction Hierarchies (OSRM style):")
+    ch_graph, rank = ch_preprocess(graph)
+    path, cost, expanded = ch_query(ch_graph, rank, 'A', 'H')
+    if path:
+        print(f"   Path: {' → '.join(path)}")
+        print(f"   Cost: {cost}, Nodes expanded: {expanded}")
+
+
+
+
+
+
 
 
 
