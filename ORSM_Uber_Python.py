@@ -23,7 +23,7 @@ References:
 
 import heapq 
 
-def biderictional_dijkstra(graph, start, goal): 
+def bidirectional_dijkstra(graph, start, goal): 
     """"
     Bidirectional Dijkstra's algorithm for finding the shortest path between two nodes in a graph. 
 
