@@ -77,7 +77,7 @@ def bidirectional_dijkstra(graph, start, goal):
                     best_cost = total 
                     meeting_node = node 
 
-            for neighbor, weight in graph.get[node].items(): 
+            for neighbor, weight in graph[node].items(): 
                 new_cost = cost + weight 
                 if new_cost < forward_cost.get(neighbor, float('inf')): 
                     forward_cost[neighbor] = new_cost 
@@ -141,7 +141,7 @@ def ch_preprocess(graph):
         ch_graph: the graph with shortcuts added
         importance: rank of each node (higher = more important)
     """
-    ch_graph = {n:dict(neighbors) for n, neighbors in graphs.items()} 
+    ch_graph = {n:dict(neighbors) for n, neighbors in graph.items()} 
 
     nodes = list(ch_graph.keys()) 
 
@@ -151,7 +151,7 @@ def ch_preprocess(graph):
         degree = len(ch_graph[node])
         importance[node] = degree 
 
-    order = sorted(nodes, jey = lambda n:importance[n])
+    order = sorted(nodes, key = lambda n:importance[n])
 
     rank = {} 
 
@@ -272,7 +272,7 @@ def ch_query(ch_graph, rank, start, goal):
     node = meeting_node 
     while node is not None: 
         forward_path.append(node) 
-        node = forward_parent(node)
+        node = forward_parent.get(node)
     forward_path.reverse()
 
     backward_path = []
