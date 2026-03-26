@@ -2,7 +2,7 @@
 test_osrm.py — More tests for the OSRM-style algorithms
 """
 
-from osrm_style import dijkstra, bidirectional_dijkstra, ch_preprocess, ch_query
+from ORSM_Uber_Python import dijkstra, bidirectional_dijkstra, ch_preprocess, ch_query
 
 
 def run_test(name, graph, start, goal):
