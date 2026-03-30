@@ -142,6 +142,7 @@ class Map:
         self.intersections = intersections
         self.roads = roads
 
+#### Edit so it can be closer to openstreetmap data### 
 
 def load_paris_map() -> Map:
     """Returns a synthetic 30-node Paris-inspired graph for testing.
@@ -274,6 +275,7 @@ def load_paris_map() -> Map:
 #   ACM Transactions on Intelligent Systems and Technology (TIST), 11(6).
 # =============================================================================
 
+### WE need to find real sources so that the data is accurate. 
 def build_danger_database() -> Dict[Tuple[int, int], float]:
     """Build a synthetic danger score database for every edge in the Paris map.
     
