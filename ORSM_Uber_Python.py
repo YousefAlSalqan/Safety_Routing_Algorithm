@@ -277,7 +277,7 @@ def ch_query(ch_graph, rank, start, goal):
 
     backward_path = []
     node = backward_parent.get(meeting_node)
-    while node is not None: 
+    while node is not None:          
         backward_path.append(node) 
         node = backward_parent.get(node)
 
