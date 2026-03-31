@@ -1,26 +1,29 @@
 import heapq 
 
-def a_star(graph, start, goal, h): 
-    #Priority queue: (f_cost, node, path, g_cost)
-    open_list = [(h[start], start,[start],0)]
-    # Explored set 
-    closed_set = set()
+def a_star(graph, start, goal,h): 
+    queue = [(h[start], start)]
+    costs = {start: 0}
+    parents = {start: None}
 
-    while open_list: 
-        f, current, path, g = heapq.heappop(open_list)
+    while queue: 
+        f , node = heapq.heappop(queue)
 
-        if current == goal: 
-            return path,g 
-        
-        if current in closed_set: 
+        if node == goal: 
+            path = [] 
+            while node is not None: 
+                path.append(node)
+                node = parents[node]
+                return path[::-1], costs[goal]
+            
+        if f > costs.get(node, float('inf')) + h[node]: 
             continue 
-        closed_set.add(current)
 
-        for neighbor, weight in graph[current]: 
-            if neighbor not in closed_set: 
-                new_g = g+weight 
-                new_f = new_g +h[neighbor]
-                heapq.heappush(open_list, (new_f, neighbor, path +[neighbor], new_g))
-    
+        for neighbor, weight in graph[node].items(): 
+            new_cost = costs[node] + weight 
+            if new_cost < costs.get(neighbor, float('inf')): 
+                costs[neighbor] = new_cost 
+                parents[neighbor] = node 
+                heapq.heappush(queue, (new_cost + h[neighbor], neighbor))
+
     return None, float('inf')
 
