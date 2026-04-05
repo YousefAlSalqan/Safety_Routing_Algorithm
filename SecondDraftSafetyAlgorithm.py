@@ -70,7 +70,7 @@ COMPOSITE HEURISTIC & ADMISSIBILITY:
     Lemma 2: h_safety(n) = 0 is admissible.
       Proof: For any path P from n to goal, the cumulative danger
       Σ danger(e) ≥ 0 since each danger(e) ∈ [0, 1]. Therefore
-      0 ≤ true_danger(n → goal). □
+      0 ≤ true_danger(n → goal). □  
     
     Lemma 3 (Main): h(n) = α · h_time(n) + (1 - α) · 0 is admissible.
       Proof: The true composite cost from n to goal is:
