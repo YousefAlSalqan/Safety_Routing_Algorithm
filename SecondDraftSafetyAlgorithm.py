@@ -1,1045 +1,961 @@
 """
-Safety-Aware A* Route Planner — First Draft
-=============================================
+Test Program for Safety-Aware A* Route Planner
+================================================
 TransportAI / CS4006 Intelligent Systems — University of Limerick
 
-Author: Yousef Al Salqan
-GitHub: https://github.com/YousefAlSalqan/Safety_Routing_Algorithm
+This test program validates the SafetyAwareAStarRouter across four test suites:
 
-PROBLEM MOTIVATION (from Assignment2_Idea.docx):
-  "I was visiting Paris for the first time... at night I wanted to go to a
-  restaurant... it turns out that I had walked in one of the most dangerous
-  neighborhoods in Paris."
-  
-  Standard routing algorithms (Dijkstra, A*) optimize for a single objective —
-  typically travel time or distance. This implementation extends A* to optimize
-  a COMPOSITE objective that balances travel time against route safety, allowing
-  users to trade off small increases in travel time for significantly safer routes.
+  TEST 1 — Small graph (5 nodes), α = 0.7
+    A minimal hand-verifiable graph where you can trace the algorithm
+    step by step and confirm the optimal path manually.
 
-CORE MATHEMATICAL FORMULATION:
-  
-  The composite edge cost function is:
-  
-      c(u, v) = α · time(u, v) + (1 - α) · danger(u, v)
-  
-  where:
-      α ∈ [0, 1]   — user-controlled preference parameter
-      time(u, v)    — normalized travel time for edge (u, v)
-      danger(u, v)  — normalized danger score for edge (u, v), ∈ [0, 1]
-  
-  This is formally an additive Multi-Attribute Utility Theory (MAUT) model.
-  [Keeney, R.L. & Raiffa, H. (1976). Decisions with Multiple Objectives:
-   Preferences and Value Tradeoffs. Wiley.]
+  TEST 2 — Big graph (50 nodes), α = 0.7
+    A larger randomly-structured graph to stress-test the algorithm
+    on a graph bigger than the 30-node London map.
 
-  The default α = 0.7 is empirically motivated by Sohrabi & Lord (2022), who
-  found that an ~8% increase in travel time corresponds to a ~23% reduction
-  in crash risk — suggesting most users would accept moderate time penalties
-  for substantial safety gains.
-  [Sohrabi, S. & Lord, D. (2022). "Impacts of autonomous vehicles on crash
-   severity and safety." Analytic Methods in Accident Research, 35.]
+  TEST 3 — Realistic London routes, α = 0.7
+    Routes between real London locations using the full London map
+    and danger database. Tests central-to-peripheral, cross-city,
+    same-zone, and edge cases.
 
-  The framing of route options as deviations from the fastest route is informed
-  by Prospect Theory — humans perceive losses (extra time) more acutely than
-  equivalent gains (improved safety), so presenting the trade-off explicitly
-  helps users make informed decisions.
-  [Kahneman, D. & Tversky, A. (1979). "Prospect Theory: An Analysis of
-   Decision under Risk." Econometrica, 47(2), 263-291.]
+  TEST 4 — Alpha comparison (low α vs high α)
+    Runs the same routes at α = 0.0, 0.3, 0.5, 0.7, 1.0 to
+    demonstrate how the trade-off parameter changes route selection.
 
-COMPOSITE HEURISTIC & ADMISSIBILITY:
-  
-  The composite heuristic is:
-  
-      h(n) = α · h_time(n) + (1 - α) · h_safety(n)
-  
-  where:
-      h_time(n)   = euclidean_distance(n, goal) / max_speed
-                    (admissible: straight-line at max speed is fastest possible)
-      h_safety(n) = 0
-                    (trivially admissible: danger is always ≥ 0)
-  
-  Therefore:
-      h(n) = α · h_time(n) + (1 - α) · 0 = α · h_time(n)
-  
-  ADMISSIBILITY PROOF (connects to Hart, Nilsson & Raphael, 1968, Theorem 1):
-  
-    Lemma 1: h_time(n) is admissible.
-      Proof: euclidean_dist(n, goal) / max_speed ≤ true_time(n → goal)
-      because no path can be shorter than the straight line, and no speed
-      can exceed max_speed. □
-    
-    Lemma 2: h_safety(n) = 0 is admissible.
-      Proof: For any path P from n to goal, the cumulative danger
-      Σ danger(e) ≥ 0 since each danger(e) ∈ [0, 1]. Therefore
-      0 ≤ true_danger(n → goal). □  
-    
-    Lemma 3 (Main): h(n) = α · h_time(n) + (1 - α) · 0 is admissible.
-      Proof: The true composite cost from n to goal is:
-        c*(n → goal) = α · true_time(n → goal) + (1-α) · true_danger(n → goal)
-      
-      We have:
-        h(n) = α · h_time(n) + 0
-             ≤ α · true_time(n → goal) + 0           [by Lemma 1]
-             ≤ α · true_time(n → goal) + (1-α) · true_danger(n → goal)
-                                                       [since danger ≥ 0, by Lemma 2]
-             = c*(n → goal)
-      
-      Therefore h(n) ≤ c*(n → goal), satisfying admissibility. □
-  
-  [Hart, P.E., Nilsson, N.J. & Raphael, B. (1968). "A Formal Basis for the
-   Heuristic Determination of Minimum Cost Paths." IEEE Transactions on
-   Systems Science and Cybernetics, 4(2), 100-107.]
+Usage:
+    Place this file in the same directory as SecondDraftSafetyAlgorithm.py
+    and run:  python test_safety_algorithm.py
 
-RELATED WORK:
-  - Levy, S. et al. (2020). "SafeRoute: Learning to Navigate Streets Safely."
-    ACM Transactions on Intelligent Systems and Technology (TIST), 11(6).
-    — Peer-reviewed safety-aware routing using crime data.
-  - Zhang, Y. & Bandara, D. (2024). CHI Conference on Human Factors.
-    — Empirical study on how users perceive safety-time trade-offs in routing.
-  - Dijkstra, E.W. (1959). "A Note on Two Problems in Connexion with Graphs."
-    Numerische Mathematik, 1, 269-271.
-  - Geisberger, R. et al. (2008). "Contraction Hierarchies: Faster and
-    Simpler Hierarchical Routing in Road Networks." WEA, 319-333.
-  - Russell, S. & Norvig, P. (2021). Artificial Intelligence: A Modern
-    Approach (4th ed.). Pearson. — Chapter 3: Search algorithms.
-
-FILE STRUCTURE:
-  Part 1 — Map class & synthetic Paris-inspired test graph (30 nodes)
-  Part 2 — Safety database (danger scores per edge)
-  Part 3 — SafetyAwarePathNode (bookkeeping)
-  Part 4 — SafetyAwareAStarRouter (core algorithm)
-  Part 5 — Convenience functions
-  Part 6 — Demo & comparison (standard A* vs safety-aware A*)
+All tests print PASS/FAIL and a summary at the end.
 """
 
 import math
-from typing import List, Dict, Tuple, Set, Optional
+import sys
+from typing import List, Dict, Tuple
+
+# Import everything from the main algorithm file
+from SecondDraftSafetyAlgorithm import (
+    Map,
+    NODE_NAMES,
+    load_london_map,
+    build_danger_database,
+    SafetyAwareAStarRouter,
+    SafetyAwarePathNode,
+    shortest_path_safety,
+    shortest_path_standard,
+)
 
 
 # =============================================================================
-# PART 1 — MAP CLASS & LONDON GRAPH
+# UTILITY FUNCTIONS
 # =============================================================================
-# The graph represents a simplified London road network with 30 nodes placed
-# at recognizable London locations. Real GPS coordinates (latitude, longitude)
-# are normalized to [0, 1] × [0, 1] space using min-max scaling across the
-# bounding box of Greater London (~51.28°N to ~51.70°N, ~-0.51°W to ~0.33°E).
+
+passed = 0
+failed = 0
+
+
+def check(test_name: str, condition: bool, detail: str = ""):
+    """Record a test result and print PASS/FAIL."""
+    global passed, failed
+    if condition:
+        passed += 1
+        print(f"  [PASS] {test_name}")
+    else:
+        failed += 1
+        print(f"  [FAIL] {test_name}")
+    if detail:
+        print(f"         {detail}")
+
+
+def path_to_names(path: List[int]) -> str:
+    """Convert a path of node IDs to London place names."""
+    return " → ".join(NODE_NAMES.get(n, str(n)) for n in path)
+
+
+def print_route_stats(router: SafetyAwareAStarRouter, path: List[int], label: str = ""):
+    """Print detailed statistics for a route."""
+    stats = router.get_path_stats(path)
+    prefix = f"    [{label}] " if label else "    "
+    print(f"{prefix}Path:   {path}")
+    print(f"{prefix}Time:   {stats['total_time']:.4f}  "
+          f"Danger: {stats['total_danger']:.4f}  "
+          f"Composite: {stats['composite_cost']:.4f}  "
+          f"Edges: {stats['num_edges']}")
+
+
+# =============================================================================
+# TEST 1 — SMALL GRAPH (5 nodes), α = 0.7
+# =============================================================================
+# 
+# Graph layout:
 #
-# In a production deployment, these would come from OpenStreetMap or the
-# Ordnance Survey Open Data initiative. For the assignment, we use a synthetic
-# 30-node graph with approximate positions and hand-assigned danger scores
-# informed by publicly available UK police crime data.
+#        (1)
+#       / | \
+#     (0) |  (3) --- (4)
+#       \ | /
+#        (2)
 #
-# Coordinate sources:
-#   - latlong.net, gps-coordinates.org (individual area lookups)
-#   - data.london.gov.uk/dataset/ordnance-survey-code-point (borough boundaries)
+# Node 0 = Start (safe hub)
+# Node 4 = Goal (destination)
+#
+# Two routes exist from 0 to 4:
+#   Route A: 0 → 1 → 3 → 4  (shorter in time, but edge 1→3 is dangerous)
+#   Route B: 0 → 2 → 3 → 4  (longer in time, but all edges are safe)
+#
+# This lets us verify by hand that the algorithm picks the right route
+# at different alpha values.
 # =============================================================================
 
-class Map:
-    """Graph representation for a road network.
-    
-    Attributes:
-        intersections (dict): {node_id: (x, y)} — coordinates of each node.
-        roads (list[list[int]]): roads[i] = neighbor node IDs for node i.
-    
-    This is the standard adjacency-list representation.
-    [Cormen, T.H. et al. (2009). Introduction to Algorithms (3rd ed.). MIT Press. Ch. 22.]
-    """
-    def __init__(self, intersections: Dict[int, Tuple[float, float]],
-                 roads: List[List[int]]):
-        self.intersections = intersections
-        self.roads = roads
-
-
-# Node name lookup — maps node IDs to real London area names for readability.
-# Used in the demo output so paths read as place names, not just numbers.
-NODE_NAMES = {
-    # Central / tourist zone (nodes 0-9)
-    0:  "Westminster",          # Government district, heavy police, CCTV
-    1:  "Covent Garden",        # Tourist hub, pedestrianised, pickpocket hotspot
-    2:  "City of London",       # Financial district, very safe after hours (empty)
-    3:  "South Bank",           # Southbank Centre, London Eye, well-lit riverside
-    4:  "Soho",                 # Entertainment district, busy nightlife
-    5:  "Kings Cross",          # Major transport hub, regenerated area
-    6:  "Tower Bridge",         # Tourist landmark, safe corridor
-    7:  "Waterloo",             # Major station, high foot traffic
-    8:  "Marylebone",           # Residential-central, quiet, affluent
-    9:  "Bloomsbury",           # UCL/British Museum area, student quarter
-    # Inner residential ring (nodes 10-19)
-    10: "Camden",               # Markets, nightlife; mixed — theft hotspot
-    11: "Shoreditch",           # Trendy, nightlife; elevated street crime
-    12: "Elephant & Castle",    # Regenerating; historically higher crime
-    13: "Notting Hill",         # Affluent residential; carnival period spikes
-    14: "Islington",            # Gentrified; pockets of deprivation remain
-    15: "Greenwich",            # Maritime heritage; relatively safe outer
-    16: "Clapham",              # Young professionals; safe residential
-    17: "Hammersmith",          # West London; moderate, transport hub
-    18: "Hackney",              # Gentrifying rapidly; still elevated crime
-    19: "Stratford",            # Olympic Park; regenerated but mixed surrounds
-    # Outer / peripheral zone (nodes 20-29)
-    20: "Tottenham",            # Haringey — consistently high violent crime
-    21: "Croydon",              # Highest total crime count in London (Met Police 2024)
-    22: "Lewisham",             # South-east; elevated knife crime
-    23: "Barking",              # East; high deprivation, elevated crime
-    24: "Brixton",              # Lambeth — high knife/gun crime (Southwark/Lambeth corridor)
-    25: "Peckham",              # Southwark — historically high crime, gentrifying
-    26: "Wood Green",           # Haringey — adjacent to Tottenham, high crime
-    27: "Woolwich",             # Greenwich borough but outer; mixed safety
-    28: "Edmonton",             # Enfield — elevated violent crime
-    29: "Seven Sisters",        # Haringey — high crime corridor
-}
-
-
-def load_london_map() -> Map:
-    """Returns a 30-node London-inspired graph for safety-aware routing.
-    
-    Node placement is based on approximate real GPS coordinates of London
-    areas, normalized to [0, 1] × [0, 1] using the bounding box:
-        lat_min=51.33, lat_max=51.62  (south Croydon to north Tottenham)
-        lon_min=-0.31, lon_max=0.08   (Hammersmith to Barking)
-    
-    Normalization formula:
-        x = (longitude - lon_min) / (lon_max - lon_min)
-        y = (latitude - lat_min) / (lat_max - lat_min)
-    
-    The graph has three zones reflecting London's crime gradient:
-      - Central/tourist area (nodes 0-9):   well-policed, CCTV, high foot traffic
-      - Inner residential ring (nodes 10-19): mixed — gentrified to deprived
-      - Outer/peripheral zone (nodes 20-29):  includes high-crime boroughs
-    
-    Coordinate sources:
-      latlong.net, gps-coordinates.org (individual area lookups)
-    
-    Crime pattern sources (informing the three-zone classification):
-      - data.police.uk — UK Police open data portal (Open Government Licence v3.0)
-      - safeareaslondon.com — 500×500m analytical grid, street-level crime density
-      - crimerate.co.uk — severity-weighted Crime Risk Scores by borough
-      - Metropolitan Police Crime Dashboard via London City Hall
-    """
-    # Real approximate GPS: (latitude, longitude)
-    # Then normalized to (x, y) via the bounding box above.
-    # x = east-west (longitude), y = south-north (latitude)
-    
-    LAT_MIN, LAT_MAX = 51.33, 51.62
-    LON_MIN, LON_MAX = -0.31, 0.08
-    
-    def normalize(lat: float, lon: float) -> Tuple[float, float]:
-        x = (lon - LON_MIN) / (LON_MAX - LON_MIN)
-        y = (lat - LAT_MIN) / (LAT_MAX - LAT_MIN)
-        return (round(x, 4), round(y, 4))
-    
+def build_small_graph() -> Tuple[Map, Dict]:
+    """Build a 5-node graph where fast-route and safe-route diverge."""
     intersections = {
-        # --- Central / tourist zone ---
-        0:  normalize(51.4947, -0.1353),   # Westminster
-        1:  normalize(51.5117, -0.1240),   # Covent Garden
-        2:  normalize(51.5155, -0.0922),   # City of London
-        3:  normalize(51.5055, -0.1160),   # South Bank
-        4:  normalize(51.5133, -0.1312),   # Soho
-        5:  normalize(51.5317, -0.1240),   # Kings Cross
-        6:  normalize(51.5055, -0.0754),   # Tower Bridge
-        7:  normalize(51.5031, -0.1132),   # Waterloo
-        8:  normalize(51.5225, -0.1544),   # Marylebone
-        9:  normalize(51.5218, -0.1278),   # Bloomsbury
-        # --- Inner residential ring ---
-        10: normalize(51.5390, -0.1426),   # Camden
-        11: normalize(51.5264, -0.0769),   # Shoreditch
-        12: normalize(51.4946, -0.1006),   # Elephant & Castle
-        13: normalize(51.5092, -0.1964),   # Notting Hill
-        14: normalize(51.5362, -0.1032),   # Islington
-        15: normalize(51.4769, -0.0005),   # Greenwich
-        16: normalize(51.4620,  -0.1380),  # Clapham
-        17: normalize(51.4928, -0.2236),   # Hammersmith
-        18: normalize(51.5450, -0.0553),   # Hackney
-        19: normalize(51.5430, -0.0034),   # Stratford
-        # --- Outer / peripheral zone ---
-        20: normalize(51.5880, -0.0720),   # Tottenham
-        21: normalize(51.3762, -0.0986),   # Croydon
-        22: normalize(51.4415, -0.0117),   # Lewisham
-        23: normalize(51.5362,  0.0808),   # Barking
-        24: normalize(51.4613, -0.1150),   # Brixton
-        25: normalize(51.4738, -0.0693),   # Peckham
-        26: normalize(51.5975, -0.1096),   # Wood Green
-        27: normalize(51.4893,  0.0654),   # Woolwich
-        28: normalize(51.6137, -0.0625),   # Edmonton
-        29: normalize(51.5833, -0.0726),   # Seven Sisters
+        0: (0.0, 0.5),   # Start — left side
+        1: (0.3, 0.8),   # Top path (dangerous shortcut)
+        2: (0.3, 0.2),   # Bottom path (safe detour)
+        3: (0.6, 0.5),   # Merge point
+        4: (1.0, 0.5),   # Goal — right side
+    }
+    roads = [
+        [1, 2],       # 0: connects to top (1) and bottom (2)
+        [0, 2, 3],    # 1: connects to 0, 2, and 3
+        [0, 1, 3],    # 2: connects to 0, 1, and 3
+        [1, 2, 4],    # 3: connects to 1, 2, and 4
+        [3],          # 4: connects only to 3
+    ]
+    
+    danger_db = {}
+    dangers = [
+        (0, 1, 0.10),   # Start → Top: low danger
+        (0, 2, 0.10),   # Start → Bottom: low danger
+        (1, 3, 0.90),   # Top → Merge: VERY dangerous (dark alley shortcut)
+        (2, 3, 0.10),   # Bottom → Merge: safe (main road)
+        (3, 4, 0.05),   # Merge → Goal: very safe
+        (1, 2, 0.15),   # Top ↔ Bottom: moderate
+    ]
+    for u, v, d in dangers:
+        danger_db[(u, v)] = d
+        danger_db[(v, u)] = d
+    
+    return Map(intersections, roads), danger_db
+
+
+def test_small_graph():
+    """TEST 1: Small 5-node graph at α = 0.7."""
+    print("\n" + "=" * 70)
+    print("TEST 1 — SMALL GRAPH (5 nodes), α = 0.7")
+    print("=" * 70)
+    
+    m, db = build_small_graph()
+    alpha = 0.7
+    router = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    
+    # --- 1a: Basic pathfinding works ---
+    path = router.find_path(0, 4)
+    check("Path from 0 to 4 exists", len(path) >= 2, f"Path: {path}")
+    check("Path starts at 0", path[0] == 0)
+    check("Path ends at 4", path[-1] == 4)
+    
+    # --- 1b: Path validity — each consecutive pair must be neighbors ---
+    valid_edges = True
+    for i in range(len(path) - 1):
+        if path[i + 1] not in m.roads[path[i]]:
+            valid_edges = False
+            break
+    check("All edges in path are valid (neighbors in adjacency list)", valid_edges)
+    
+    # --- 1c: Stats are non-negative ---
+    stats = router.get_path_stats(path)
+    check("Total time ≥ 0", stats["total_time"] >= 0)
+    check("Total danger ≥ 0", stats["total_danger"] >= 0)
+    check("Composite cost ≥ 0", stats["composite_cost"] >= 0)
+    check("Edge count matches path length - 1",
+          stats["num_edges"] == len(path) - 1,
+          f"Edges: {stats['num_edges']}, Path length: {len(path)}")
+    
+    # --- 1d: Trivial case — start == goal ---
+    trivial = router.find_path(3, 3)
+    check("Trivial path (start == goal) returns [3]", trivial == [3])
+    
+    # --- 1e: Route avoids the dangerous edge at α=0.7 ---
+    # At α=0.7 the algorithm should prefer the safe bottom route (0→2→3→4)
+    # over the dangerous top route (0→1→3→4) because edge 1→3 has danger=0.90
+    print(f"\n  Route chosen at α={alpha}: {path}")
+    print_route_stats(router, path)
+    
+    # Compare both routes explicitly
+    route_top = [0, 1, 3, 4]     # Fast but dangerous
+    route_bottom = [0, 2, 3, 4]  # Slower but safe
+    
+    r_top = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    r_bot = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    s_top = r_top.get_path_stats(route_top)
+    s_bot = r_bot.get_path_stats(route_bottom)
+    
+    print(f"\n  Manual comparison:")
+    print(f"    Top route    [0→1→3→4]: time={s_top['total_time']:.4f}  "
+          f"danger={s_top['total_danger']:.4f}  composite={s_top['composite_cost']:.4f}")
+    print(f"    Bottom route [0→2→3→4]: time={s_bot['total_time']:.4f}  "
+          f"danger={s_bot['total_danger']:.4f}  composite={s_bot['composite_cost']:.4f}")
+    
+    # The algorithm should pick whichever has lower composite cost
+    if s_bot["composite_cost"] < s_top["composite_cost"]:
+        check("Algorithm picks safer bottom route (lower composite cost)",
+              1 not in path or path != route_top,
+              "Bottom route has lower composite cost, algorithm should avoid top")
+    else:
+        check("Algorithm picks faster top route (lower composite cost)",
+              path == route_top,
+              "Top route has lower composite cost despite danger")
+
+
+# =============================================================================
+# TEST 2 — BIG GRAPH (50 nodes), α = 0.7
+# =============================================================================
+# A procedurally generated graph larger than the London map to verify the
+# algorithm scales correctly. Nodes are placed on a grid with random-ish
+# connections and danger scores.
+# =============================================================================
+
+def build_big_graph() -> Tuple[Map, Dict]:
+    """Build a 50-node grid-like graph with synthetic danger scores."""
+    # Place 50 nodes in a 10x5 grid pattern
+    intersections = {}
+    for i in range(50):
+        row = i // 10
+        col = i % 10
+        x = col / 9.0  # Normalize to [0, 1]
+        y = row / 4.0   # Normalize to [0, 1]
+        intersections[i] = (x, y)
+    
+    # Connect each node to its grid neighbors (right, down, diagonal)
+    roads = [[] for _ in range(50)]
+    danger_db = {}
+    
+    for i in range(50):
+        row = i // 10
+        col = i % 10
+        neighbors = []
+        
+        # Right neighbor
+        if col < 9:
+            neighbors.append(i + 1)
+        # Down neighbor
+        if row < 4:
+            neighbors.append(i + 10)
+        # Diagonal down-right
+        if col < 9 and row < 4:
+            neighbors.append(i + 11)
+        
+        for j in neighbors:
+            if j not in roads[i]:
+                roads[i].append(j)
+            if i not in roads[j]:
+                roads[j].append(i)
+            
+            # Assign danger based on position:
+            # Top rows (0-1) are safe, middle (2) is mixed, bottom (3-4) is dangerous
+            avg_row = (row + (j // 10)) / 2.0
+            if avg_row < 1.5:
+                danger = 0.05 + (col % 3) * 0.05    # 0.05 - 0.15 (safe)
+            elif avg_row < 2.5:
+                danger = 0.25 + (col % 4) * 0.08    # 0.25 - 0.49 (mixed)
+            else:
+                danger = 0.55 + (col % 3) * 0.12    # 0.55 - 0.79 (dangerous)
+            
+            danger_db[(i, j)] = round(danger, 2)
+            danger_db[(j, i)] = round(danger, 2)
+    
+    return Map(intersections, roads), danger_db
+
+
+def test_big_graph():
+    """TEST 2: Big 50-node graph at α = 0.7."""
+    print("\n" + "=" * 70)
+    print("TEST 2 — BIG GRAPH (50 nodes), α = 0.7")
+    print("=" * 70)
+    
+    m, db = build_big_graph()
+    alpha = 0.7
+    
+    print(f"\n  Graph: {len(m.intersections)} nodes, "
+          f"{sum(len(r) for r in m.roads) // 2} edges (approx)")
+    print(f"  Danger database: {len(db) // 2} unique edges scored")
+    
+    # --- 2a: Path across entire graph (top-left to bottom-right) ---
+    router = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    path = router.find_path(0, 49)
+    check("Path from node 0 to node 49 exists", len(path) >= 2, f"Path: {path}")
+    check("Path starts at 0", path[0] == 0)
+    check("Path ends at 49", path[-1] == 49)
+    
+    stats = router.get_path_stats(path)
+    print_route_stats(router, path, "0 → 49")
+    
+    # --- 2b: All edges in the path are valid ---
+    valid = all(path[i + 1] in m.roads[path[i]] for i in range(len(path) - 1))
+    check("All edges in 0→49 path are valid neighbors", valid)
+    
+    # --- 2c: Path from safe zone to dangerous zone ---
+    router2 = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    path2 = router2.find_path(5, 45)
+    check("Path from node 5 to node 45 exists", len(path2) >= 2, f"Path: {path2}")
+    stats2 = router2.get_path_stats(path2)
+    print_route_stats(router2, path2, "5 → 45")
+    
+    # --- 2d: Multiple routes produce non-zero stats ---
+    test_pairs = [(0, 25), (10, 40), (3, 47), (9, 41)]
+    for s, g in test_pairs:
+        r = SafetyAwareAStarRouter(m, db, alpha=alpha)
+        p = r.find_path(s, g)
+        st = r.get_path_stats(p)
+        check(f"Route {s}→{g}: path exists with positive cost",
+              len(p) >= 2 and st["composite_cost"] > 0,
+              f"Path length: {len(p)}, Composite: {st['composite_cost']:.4f}")
+    
+    # --- 2e: Trivial case on big graph ---
+    r_triv = SafetyAwareAStarRouter(m, db, alpha=alpha)
+    check("Trivial path (25→25) returns [25]", r_triv.find_path(25, 25) == [25])
+    
+    # --- 2f: Compare α=1.0 vs α=0.7 — safety-aware should have ≤ danger ---
+    r_fast = SafetyAwareAStarRouter(m, db, alpha=1.0)
+    r_safe = SafetyAwareAStarRouter(m, db, alpha=0.7)
+    p_fast = r_fast.find_path(0, 49)
+    p_safe = r_safe.find_path(0, 49)
+    sf = r_fast.get_path_stats(p_fast)
+    ss = r_safe.get_path_stats(p_safe)
+    
+    check("Safety-aware (α=0.7) danger ≤ fastest (α=1.0) danger",
+          ss["total_danger"] <= sf["total_danger"] + 0.001,
+          f"α=1.0 danger: {sf['total_danger']:.4f}, α=0.7 danger: {ss['total_danger']:.4f}")
+
+
+# =============================================================================
+# TEST 3 — REALISTIC LONDON ROUTES, α = 0.7
+# =============================================================================
+# Tests using the actual London map and danger database from the main file.
+# Routes cover: central-to-peripheral, cross-city, within-zone, edge cases.
+# =============================================================================
+
+def test_london_routes():
+    """TEST 3: Realistic London routes at α = 0.7."""
+    print("\n" + "=" * 70)
+    print("TEST 3 — REALISTIC LONDON ROUTES, α = 0.7")
+    print("=" * 70)
+    
+    london = load_london_map()
+    db = build_danger_database()
+    alpha = 0.7
+    
+    print(f"\n  London map: {len(london.intersections)} nodes, "
+          f"{sum(len(r) for r in london.roads) // 2} edges")
+    
+    # --- 3a: Westminster to Tottenham (central to high-crime outer north) ---
+    r = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path = r.find_path(0, 20)
+    stats = r.get_path_stats(path)
+    check("Westminster → Tottenham: path exists",
+          len(path) >= 2, f"{path_to_names(path)}")
+    check("Westminster → Tottenham: starts at Westminster", path[0] == 0)
+    check("Westminster → Tottenham: ends at Tottenham", path[-1] == 20)
+    print_route_stats(r, path, "Westminster → Tottenham")
+    
+    # --- 3b: Notting Hill to Barking (affluent west to deprived east) ---
+    r2 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path2 = r2.find_path(13, 23)
+    stats2 = r2.get_path_stats(path2)
+    check("Notting Hill → Barking: path exists",
+          len(path2) >= 2, f"{path_to_names(path2)}")
+    print_route_stats(r2, path2, "Notting Hill → Barking")
+    
+    # --- 3c: Westminster to Croydon (central to highest-crime-count borough) ---
+    r3 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path3 = r3.find_path(0, 21)
+    stats3 = r3.get_path_stats(path3)
+    check("Westminster → Croydon: path exists",
+          len(path3) >= 2, f"{path_to_names(path3)}")
+    print_route_stats(r3, path3, "Westminster → Croydon")
+    
+    # --- 3d: Brixton to Lewisham (south London high-crime corridor) ---
+    r4 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path4 = r4.find_path(24, 22)
+    stats4 = r4.get_path_stats(path4)
+    check("Brixton → Lewisham: path exists",
+          len(path4) >= 2, f"{path_to_names(path4)}")
+    print_route_stats(r4, path4, "Brixton → Lewisham")
+    
+    # --- 3e: Marylebone to Edmonton (west-central to outer north) ---
+    r5 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path5 = r5.find_path(8, 28)
+    stats5 = r5.get_path_stats(path5)
+    check("Marylebone → Edmonton: path exists",
+          len(path5) >= 2, f"{path_to_names(path5)}")
+    print_route_stats(r5, path5, "Marylebone → Edmonton")
+    
+    # --- 3f: Within central zone (Covent Garden to Tower Bridge) ---
+    r6 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path6 = r6.find_path(1, 6)
+    stats6 = r6.get_path_stats(path6)
+    check("Covent Garden → Tower Bridge: path exists",
+          len(path6) >= 2, f"{path_to_names(path6)}")
+    check("Covent Garden → Tower Bridge: low danger (central zone)",
+          stats6["total_danger"] < 0.5,
+          f"Danger: {stats6['total_danger']:.4f} (expected < 0.5 for central route)")
+    print_route_stats(r6, path6, "Covent Garden → Tower Bridge")
+    
+    # --- 3g: Within dangerous zone (Tottenham to Edmonton) ---
+    r7 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    path7 = r7.find_path(20, 28)
+    stats7 = r7.get_path_stats(path7)
+    check("Tottenham → Edmonton: path exists",
+          len(path7) >= 2, f"{path_to_names(path7)}")
+    check("Tottenham → Edmonton: high danger (outer zone)",
+          stats7["total_danger"] > 0.5,
+          f"Danger: {stats7['total_danger']:.4f} (expected > 0.5 for outer route)")
+    print_route_stats(r7, path7, "Tottenham → Edmonton")
+    
+    # --- 3h: Trivial case ---
+    r8 = SafetyAwareAStarRouter(london, db, alpha=alpha)
+    check("Kings Cross → Kings Cross (trivial): returns [5]",
+          r8.find_path(5, 5) == [5])
+    
+    # --- 3i: Edge validity for all London routes ---
+    all_valid = True
+    for test_path in [path, path2, path3, path4, path5, path6, path7]:
+        for i in range(len(test_path) - 1):
+            if test_path[i + 1] not in london.roads[test_path[i]]:
+                all_valid = False
+                print(f"    INVALID EDGE: {test_path[i]} → {test_path[i+1]}")
+                break
+    check("All London route edges are valid (in adjacency list)", all_valid)
+    
+    # --- 3j: Convenience function matches direct router call ---
+    path_conv = shortest_path_safety(london, db, 0, 20, alpha=0.7)
+    check("shortest_path_safety() matches router.find_path()",
+          path_conv == path,
+          f"Convenience: {path_conv}, Direct: {path}")
+    
+    path_std = shortest_path_standard(london, db, 0, 20)
+    r_std = SafetyAwareAStarRouter(london, db, alpha=1.0)
+    path_std_direct = r_std.find_path(0, 20)
+    check("shortest_path_standard() matches α=1.0 router",
+          path_std == path_std_direct)
+
+
+# =============================================================================
+# TEST 4 — ALPHA COMPARISON (low α vs high α)
+# =============================================================================
+# Runs the same routes at α = 0.0, 0.3, 0.5, 0.7, 1.0 to show how the
+# trade-off parameter changes route selection, time, and danger.
+# =============================================================================
+
+def test_alpha_comparison():
+    """TEST 4: Compare low vs high alpha across multiple routes."""
+    print("\n" + "=" * 70)
+    print("TEST 4 — ALPHA COMPARISON (low α vs high α)")
+    print("=" * 70)
+    
+    london = load_london_map()
+    db = build_danger_database()
+    
+    alphas = [0.0, 0.3, 0.5, 0.7, 1.0]
+    
+    # Routes that should show meaningful trade-offs
+    test_routes = [
+        (0, 20,  "Westminster → Tottenham"),
+        (0, 21,  "Westminster → Croydon"),
+        (13, 23, "Notting Hill → Barking"),
+        (8, 28,  "Marylebone → Edmonton"),
+    ]
+    
+    for start, goal, desc in test_routes:
+        print(f"\n  {'─' * 64}")
+        print(f"  {desc} (node {start} → node {goal})")
+        print(f"  {'─' * 64}")
+        print(f"  {'α':<6} {'Path':<50} {'Time':>8} {'Danger':>8} {'Composite':>10}")
+        print(f"  {'─'*6} {'─'*50} {'─'*8} {'─'*8} {'─'*10}")
+        
+        results = []
+        for alpha in alphas:
+            router = SafetyAwareAStarRouter(london, db, alpha=alpha)
+            path = router.find_path(start, goal)
+            stats = router.get_path_stats(path)
+            names = path_to_names(path)
+            # Truncate long paths for display
+            if len(names) > 48:
+                names = names[:45] + "..."
+            print(f"  {alpha:<6.1f} {names:<50} {stats['total_time']:>8.4f} "
+                  f"{stats['total_danger']:>8.4f} {stats['composite_cost']:>10.4f}")
+            results.append((alpha, path, stats))
+        
+        # --- Key assertions ---
+        # At α=1.0 (pure time), the route should be fastest
+        fastest_time = results[-1][2]["total_time"]
+        for alpha_val, _, stats in results:
+            check(f"{desc} α={alpha_val}: time ≥ fastest (α=1.0)",
+                  stats["total_time"] >= fastest_time - 0.001,
+                  f"Time: {stats['total_time']:.4f} vs fastest: {fastest_time:.4f}")
+        
+        # At α=0.0 (pure safety), the route should be safest
+        safest_danger = results[0][2]["total_danger"]
+        for alpha_val, _, stats in results:
+            check(f"{desc} α={alpha_val}: danger ≥ safest (α=0.0)",
+                  stats["total_danger"] >= safest_danger - 0.001,
+                  f"Danger: {stats['total_danger']:.4f} vs safest: {safest_danger:.4f}")
+        
+        # Trade-off analysis between α=1.0 and α=0.0
+        s_fast = results[-1][2]  # α = 1.0
+        s_safe = results[0][2]   # α = 0.0
+        p_fast = results[-1][1]  # path at α = 1.0
+        p_safe = results[0][1]   # path at α = 0.0
+        
+        if s_fast["total_time"] > 0 and s_fast["total_danger"] > 0:
+            time_increase = ((s_safe["total_time"] - s_fast["total_time"]) 
+                            / s_fast["total_time"] * 100)
+            danger_decrease = ((s_fast["total_danger"] - s_safe["total_danger"])
+                              / s_fast["total_danger"] * 100)
+            print(f"\n  Trade-off (α=0.0 vs α=1.0):")
+            print(f"    Time increase:   +{time_increase:.1f}%")
+            print(f"    Danger reduction: {danger_decrease:.1f}%")
+            
+            if s_fast["total_danger"] != s_safe["total_danger"]:
+                print(f"    → Different paths chosen: trade-off is active")
+            else:
+                print(f"    → Same path chosen: no safer alternative exists")
+        
+        # --- PATH DIFFERENCE CHECKS ---
+        # Collect all unique paths across alpha values
+        unique_paths = []
+        for alpha_val, p, _ in results:
+            if p not in unique_paths:
+                unique_paths.append(p)
+        
+        print(f"\n  Path difference analysis:")
+        print(f"    Unique paths found across 5 alpha values: {len(unique_paths)}")
+        for idx, up in enumerate(unique_paths):
+            # Which alpha values produced this path?
+            matching_alphas = [a for a, p, _ in results if p == up]
+            print(f"    Path {idx+1}: {path_to_names(up)}")
+            print(f"            Used by α = {matching_alphas}")
+        
+        # Check: does α=0.0 produce a different path than α=1.0?
+        paths_differ = (p_fast != p_safe)
+        if len(unique_paths) > 1:
+            # Multiple paths exist — α SHOULD produce different routes
+            check(f"{desc}: α=0.0 and α=1.0 produce different paths",
+                  paths_differ,
+                  f"α=0.0: {p_safe}, α=1.0: {p_fast}")
+        else:
+            # Only one path exists — α cannot change the route (topology constraint)
+            check(f"{desc}: only one viable path exists (same at all α values)",
+                  not paths_differ,
+                  f"Path: {p_safe} (no safer alternative in graph topology)")
+        
+        # If paths differ, verify the REASON is correct:
+        # α=0.0 path should have less danger, α=1.0 path should have less time
+        if paths_differ:
+            check(f"{desc}: safest path (α=0.0) has ≤ danger than fastest (α=1.0)",
+                  s_safe["total_danger"] <= s_fast["total_danger"] + 0.001,
+                  f"Safe danger: {s_safe['total_danger']:.4f}, "
+                  f"Fast danger: {s_fast['total_danger']:.4f}")
+            check(f"{desc}: fastest path (α=1.0) has ≤ time than safest (α=0.0)",
+                  s_fast["total_time"] <= s_safe["total_time"] + 0.001,
+                  f"Fast time: {s_fast['total_time']:.4f}, "
+                  f"Safe time: {s_safe['total_time']:.4f}")
+            
+            # Check: do we see at least one intermediate alpha choosing a THIRD path?
+            # (not required but interesting — shows the α parameter is granular)
+            mid_alphas_different = any(
+                p != p_fast and p != p_safe 
+                for _, p, _ in results[1:-1]  # α = 0.3, 0.5, 0.7
+            )
+            if mid_alphas_different:
+                print(f"    ✓ Intermediate α values produce additional distinct paths")
+            else:
+                print(f"    ○ Intermediate α values use one of the two extreme paths")
+
+
+# =============================================================================
+# TEST 5 — OBSERVED MAX TIME INCREASE PER ALPHA
+# =============================================================================
+# This test measures the EMPIRICAL behavior of the algorithm on the London
+# graph. For each α value, it runs every possible start-goal pair and records
+# the maximum % time increase compared to the fastest route (α=1.0).
+#
+# IMPORTANT: There is NO hard cap in the algorithm. The MAUT cost function
+#     c = α·time + (1-α)·danger
+# will accept any amount of extra time if it's mathematically justified by
+# the danger reduction. The "maximum" observed here is purely a consequence
+# of the graph topology — it reflects how much longer the longest safer
+# detour in the 30-node London graph happens to be.
+#
+# In theory, the algorithm's willingness to accept extra time per unit of
+# danger reduction is (1-α)/α — see Test 6 for that exchange rate check.
+# =============================================================================
+
+def test_max_time_increase():
+    """TEST 5: Measure observed max time increase per α on all London routes."""
+    print("\n" + "=" * 70)
+    print("TEST 5 — OBSERVED MAX TIME INCREASE PER α (London graph)")
+    print("=" * 70)
+    
+    london = load_london_map()
+    db = build_danger_database()
+    
+    alphas = [1.0, 0.9, 0.7, 0.5, 0.3, 0.1, 0.0]
+    n_nodes = len(london.intersections)
+    
+    print(f"\n  Testing all {n_nodes * (n_nodes - 1)} ordered (start, goal) pairs")
+    print(f"  on the London graph at each α value.\n")
+    print(f"  {'α':<6} {'Max +time%':<12} {'Mean +time%':<14} {'Max +danger reduction':<24} "
+          f"{'Worst route':<30}")
+    print(f"  {'─'*6} {'─'*12} {'─'*14} {'─'*24} {'─'*30}")
+    
+    # First pass: compute fastest-route stats (α=1.0) for every start-goal pair
+    # We use these as the baseline for % time increase.
+    baseline = {}
+    r_fast = SafetyAwareAStarRouter(london, db, alpha=1.0)
+    for s in range(n_nodes):
+        for g in range(n_nodes):
+            if s == g:
+                continue
+            p = r_fast.find_path(s, g)
+            if len(p) >= 2:
+                stats = r_fast.get_path_stats(p)
+                baseline[(s, g)] = stats
+    
+    # For each alpha, compute the % time increase vs baseline for every pair
+    results_per_alpha = {}
+    for alpha in alphas:
+        r = SafetyAwareAStarRouter(london, db, alpha=alpha)
+        time_increases = []      # list of (pct_increase, s, g)
+        danger_reductions = []   # list of (pct_reduction, s, g)
+        
+        for (s, g), base_stats in baseline.items():
+            p = r.find_path(s, g)
+            if len(p) < 2:
+                continue
+            stats = r.get_path_stats(p)
+            
+            if base_stats["total_time"] > 0:
+                pct_t = ((stats["total_time"] - base_stats["total_time"])
+                         / base_stats["total_time"]) * 100
+                time_increases.append((pct_t, s, g))
+            
+            if base_stats["total_danger"] > 0:
+                pct_d = ((base_stats["total_danger"] - stats["total_danger"])
+                         / base_stats["total_danger"]) * 100
+                danger_reductions.append((pct_d, s, g))
+        
+        max_time_inc = max(time_increases, key=lambda x: x[0])
+        mean_time_inc = sum(x[0] for x in time_increases) / len(time_increases)
+        max_danger_red = max(danger_reductions, key=lambda x: x[0])
+        
+        worst_route = f"{NODE_NAMES.get(max_time_inc[1], max_time_inc[1])} → {NODE_NAMES.get(max_time_inc[2], max_time_inc[2])}"
+        if len(worst_route) > 28:
+            worst_route = worst_route[:25] + "..."
+        
+        print(f"  {alpha:<6.2f} {max_time_inc[0]:<12.2f} {mean_time_inc:<14.2f} "
+              f"{max_danger_red[0]:<24.2f} {worst_route:<30}")
+        
+        results_per_alpha[alpha] = {
+            "max_time_inc": max_time_inc[0],
+            "mean_time_inc": mean_time_inc,
+            "max_danger_red": max_danger_red[0],
+            "worst_route": (max_time_inc[1], max_time_inc[2]),
+        }
+    
+    # --- Assertions ---
+    
+    # α=1.0 should have 0% max time increase (it IS the baseline)
+    check("α=1.0: max time increase is 0% (baseline)",
+          abs(results_per_alpha[1.0]["max_time_inc"]) < 0.01,
+          f"Observed: {results_per_alpha[1.0]['max_time_inc']:.4f}%")
+    
+    # Max time increase should be MONOTONICALLY non-decreasing as α drops
+    # (lower α = more willing to add time for safety)
+    prev_max = -0.01
+    monotonic_time = True
+    for alpha in alphas:  # alphas is already sorted high → low
+        cur = results_per_alpha[alpha]["max_time_inc"]
+        if cur < prev_max - 0.01:
+            monotonic_time = False
+            break
+        prev_max = cur
+    check("Max time increase is monotonically non-decreasing as α drops",
+          monotonic_time,
+          "Lower α should accept ≥ extra time than higher α")
+    
+    # Max danger reduction should also be monotonically non-decreasing as α drops
+    prev_max_d = -0.01
+    monotonic_danger = True
+    for alpha in alphas:
+        cur = results_per_alpha[alpha]["max_danger_red"]
+        if cur < prev_max_d - 0.01:
+            monotonic_danger = False
+            break
+        prev_max_d = cur
+    check("Max danger reduction is monotonically non-decreasing as α drops",
+          monotonic_danger,
+          "Lower α should achieve ≥ danger reduction than higher α")
+    
+    # At α=0.0, the algorithm should find the maximum possible time increase
+    # (it completely ignores time). Report it for interpretation.
+    alpha_0_max = results_per_alpha[0.0]["max_time_inc"]
+    print(f"\n  At α=0.0 (pure safety), the algorithm accepts up to")
+    print(f"  +{alpha_0_max:.1f}% extra time — this is not a hard cap, it's")
+    print(f"  simply the longest safer detour that exists in the graph.")
+    print(f"  The worst-case route is "
+          f"{NODE_NAMES.get(results_per_alpha[0.0]['worst_route'][0])} → "
+          f"{NODE_NAMES.get(results_per_alpha[0.0]['worst_route'][1])}.")
+
+
+# =============================================================================
+# TEST 6 — EXCHANGE RATE VERIFICATION: (1-α) / α
+# =============================================================================
+# The composite cost function c = α·time + (1-α)·danger implies that A* will
+# prefer a "safer" route over a "faster" route if and only if the danger
+# savings outweigh the time cost according to the ratio (1-α)/α.
+#
+# Formally: the algorithm switches from route A to route B when
+#
+#     α · (time_B - time_A)  <  (1-α) · (danger_A - danger_B)
+#
+# which rearranges to:
+#
+#     (time_B - time_A) / (danger_A - danger_B)  <  (1-α) / α
+#
+# The quantity (1-α)/α is the maximum "time units per danger unit" the
+# algorithm will pay to swap to a safer route.
+#
+# We verify this by constructing a minimal 3-node graph with two alternative
+# routes (A: fast-dangerous, B: slow-safe) and finding the THRESHOLD α where
+# the algorithm switches from A to B. Then we check that this threshold
+# matches the theoretical prediction within a small tolerance.
+# =============================================================================
+
+def build_threshold_graph(time_A: float, danger_A: float,
+                            time_B: float, danger_B: float) -> Tuple[Map, Dict]:
+    """Build a minimal graph with two alternative routes from 0 to 2.
+    
+    Route A: 0 → 1 → 2  (time=time_A, danger=danger_A split across both edges)
+    Route B: 0 → 3 → 2  (time=time_B, danger=danger_B split across both edges)
+    
+    We use Euclidean coordinates to control edge "time" exactly: edge time
+    equals Euclidean distance (since max_speed=1.0 by default).
+    """
+    # Place node 0 at origin and node 2 as the goal.
+    # Node 1 (route A) and node 3 (route B) are intermediate points.
+    # Edge times are just euclidean distances.
+    
+    # Put node 1 at (time_A/2, 0) and node 3 at (time_B/2, 0.01)
+    # so route A has length time_A, route B has length time_B.
+    # (We use 0.01 y-offset for B to keep Euclidean distances well-defined.)
+    intersections = {
+        0: (0.0, 0.0),
+        1: (time_A / 2, 0.0),
+        2: (time_A, 0.0) if time_A >= time_B else (time_B, 0.0),
+        3: (time_B / 2, 0.01),
+    }
+    # Actually we need route A total time = time_A exactly, regardless of where 2 is.
+    # Simpler: use a star topology. Node 2's position affects the heuristic but
+    # we'll place it at (max(time_A, time_B), 0) so it doesn't interfere.
+    goal_x = max(time_A, time_B)
+    intersections = {
+        0: (0.0, 0.0),
+        1: (time_A / 2, 0.0),
+        2: (goal_x, 0.0),
+        3: (time_B / 2, 0.0),
     }
     
-    # --- Adjacency list ---
-    # Connections reflect approximate geographic proximity and major transport
-    # links (tube lines, bus corridors, walking routes). Central nodes are
-    # heavily interconnected; outer nodes connect to their geographic neighbors
-    # and a few inner nodes, creating competing route options (fast-through-
-    # dangerous vs. longer-through-safe).
+    # But now euclidean(0,1) + euclidean(1,2) doesn't equal time_A unless
+    # we place them on a straight line. Let's do it right: node 1 on the line
+    # from 0 to 2 at distance time_A/2 from node 0. But 0 to 2 distance is goal_x.
+    # If time_A == goal_x, then node 1 at (time_A/2, 0) gives total route A time =
+    # time_A/2 + time_A/2 = time_A. ✓
+    # If time_A > goal_x, node 1 needs to be OFF the 0→2 line to add detour.
+    
+    # Simpler approach: just override the Euclidean with explicit edge costs.
+    # But the router uses euclidean_dist internally for edge_time... 
+    # Let me use a geometry that naturally gives the right distances.
+    
+    # CLEANEST: use a diamond with nodes at cardinal directions.
+    # Node 0 at (0, 0), node 2 at (total, 0).
+    # Route A: 0 → 1 → 2 where node 1 is above the line at (total/2, yA).
+    #   Route length = 2 * sqrt((total/2)^2 + yA^2)
+    # Route B: 0 → 3 → 2 where node 3 is below at (total/2, -yB).
+    #   Route length = 2 * sqrt((total/2)^2 + yB^2)
+    #
+    # Solve for yA and yB given desired route lengths:
+    #   yA = sqrt((time_A/2)^2 - (total/2)^2)
+    #   yB = sqrt((time_B/2)^2 - (total/2)^2)
+    # This requires time_A >= total and time_B >= total.
+    
+    total = min(time_A, time_B) * 0.8  # goal distance < both route lengths
+    half = total / 2
+    yA = math.sqrt(max(0, (time_A / 2) ** 2 - half ** 2))
+    yB = math.sqrt(max(0, (time_B / 2) ** 2 - half ** 2))
+    
+    intersections = {
+        0: (0.0, 0.0),
+        1: (half, yA),     # route A intermediate (above)
+        2: (total, 0.0),   # goal
+        3: (half, -yB),    # route B intermediate (below)
+    }
+    
     roads = [
-        # 0  Westminster: central hub, connects to all nearby central nodes
-        [1, 3, 4, 7, 8, 13, 16, 24],
-        # 1  Covent Garden: tourist core, dense central connections
-        [0, 2, 3, 4, 9],
-        # 2  City of London: financial district, east-central
-        [1, 3, 6, 11, 14],
-        # 3  South Bank: riverside, links west-east central
-        [0, 1, 2, 6, 7, 12],
-        # 4  Soho: entertainment, links to west-central
-        [0, 1, 8, 9, 10, 13],
-        # 5  Kings Cross: north transport hub
-        [9, 10, 14, 20, 26],
-        # 6  Tower Bridge: east-central landmark
-        [2, 3, 11, 12, 15, 25],
-        # 7  Waterloo: south-central station
-        [0, 3, 12, 16, 24],
-        # 8  Marylebone: west-central residential
-        [0, 4, 9, 10, 13, 17],
-        # 9  Bloomsbury: academic quarter, north-central
-        [1, 4, 5, 8, 10, 14],
-        # 10 Camden: inner north, nightlife + markets
-        [4, 5, 8, 9, 14, 20, 26],
-        # 11 Shoreditch: inner east, tech/nightlife
-        [2, 6, 14, 18, 19],
-        # 12 Elephant & Castle: inner south, regenerating
-        [3, 6, 7, 15, 16, 22, 24, 25],
-        # 13 Notting Hill: inner west, affluent
-        [0, 4, 8, 17],
-        # 14 Islington: inner north, gentrified
-        [2, 5, 9, 10, 11, 18],
-        # 15 Greenwich: south-east, maritime
-        [6, 12, 22, 25, 27],
-        # 16 Clapham: south, residential
-        [0, 7, 12, 21, 24],
-        # 17 Hammersmith: west, transport hub
-        [8, 13],
-        # 18 Hackney: inner east, gentrifying
-        [11, 14, 19, 20, 23, 29],
-        # 19 Stratford: east, Olympic Park
-        [11, 18, 23, 27],
-        # 20 Tottenham: outer north, high crime
-        [5, 10, 18, 26, 28, 29],
-        # 21 Croydon: outer south, highest crime count
-        [16, 22, 25],
-        # 22 Lewisham: outer south-east
-        [12, 15, 21, 25, 27],
-        # 23 Barking: outer east, deprived
-        [18, 19, 27],
-        # 24 Brixton: south, Lambeth corridor
-        [0, 7, 12, 16, 25],
-        # 25 Peckham: south, Southwark
-        [6, 12, 15, 21, 22, 24],
-        # 26 Wood Green: outer north, Haringey
-        [5, 10, 20, 28, 29],
-        # 27 Woolwich: outer south-east
-        [15, 19, 22, 23],
-        # 28 Edmonton: outer north, Enfield
-        [20, 26, 29],
-        # 29 Seven Sisters: outer north, Haringey
-        [18, 20, 26, 28],
+        [1, 3],    # 0: connects to both intermediates
+        [0, 2],    # 1: route A path
+        [1, 3],    # 2: goal (reachable from 1 and 3)
+        [0, 2],    # 3: route B path
     ]
     
-    return Map(intersections, roads)
-
-
-# =============================================================================
-# PART 2 — SAFETY DATABASE (LONDON)
-# =============================================================================
-# Each edge (u, v) has a danger score ∈ [0, 1] where:
-#   0.0 = very safe (well-lit, heavy police presence, CCTV, high foot traffic)
-#   1.0 = maximum danger (high violent crime, poor lighting, isolated)
-#
-# METHODOLOGY:
-#   Scores are assigned based on publicly available crime patterns from:
-#
-#   1. data.police.uk — Official UK street-level police data portal
-#      (Open Government Licence v3.0). Provides anonymised crime locations
-#      at street level, categorised by offence type.
-#
-#   2. safeareaslondon.com — Independent analytical project using a 500×500m
-#      grid overlaid on the police data, with severity-weighted Local Crime
-#      Level Index scores. Reveals within-borough variation invisible in
-#      aggregate statistics.
-#
-#   3. crimerate.co.uk — Crime Risk Scores by borough, calculated using
-#      severity weighting (violent crime weighted higher than shoplifting).
-#      Data period: January 2024 – November 2025.
-#      Key findings used:
-#        - Westminster: highest Crime Risk Score (but mostly property crime)
-#        - Kingston, Richmond: lowest Crime Risk Scores (~60/1,000)
-#        - Croydon: highest total crime count in London
-#        - Hackney, Tower Hamlets, Southwark: elevated violent crime
-#        - Haringey (Tottenham, Wood Green): persistent violent crime hotspot
-#
-#   4. Metropolitan Police Crime Dashboard (via London City Hall) —
-#      Borough and ward-level breakdowns. Used for cross-validation.
-#
-# SCORE ASSIGNMENT RATIONALE:
-#   - Scores reflect PEDESTRIAN risk (not vehicle crime or fraud).
-#   - We weight violent crime, robbery, and antisocial behaviour most heavily,
-#     as these directly affect someone walking through an area.
-#   - Tourist areas (Westminster, Covent Garden) get LOW danger scores despite
-#     high total crime counts, because most crime there is pickpocketing with
-#     massive police presence — the per-pedestrian risk is low.
-#   - Edges connecting two areas inherit the HIGHER danger of the two endpoints,
-#     representing the worst segment a pedestrian would traverse.
-#
-# NOTE: In a production system, these scores would be dynamically computed
-# from the data.police.uk API, aggregated over a rolling 6-month window and
-# normalized per-edge. The static scores here capture the general spatial
-# pattern as of late 2024/early 2025.
-#
-# [Levy, S. et al. (2020). "SafeRoute: Learning to Navigate Streets Safely."
-#  ACM Transactions on Intelligent Systems and Technology (TIST), 11(6).]
-# =============================================================================
-
-def build_danger_database() -> Dict[Tuple[int, int], float]:
-    """Build danger score database for every edge in the London map.
+    # Danger is split evenly across the two edges of each route
+    danger_db = {
+        (0, 1): danger_A / 2, (1, 0): danger_A / 2,
+        (1, 2): danger_A / 2, (2, 1): danger_A / 2,
+        (0, 3): danger_B / 2, (3, 0): danger_B / 2,
+        (3, 2): danger_B / 2, (2, 3): danger_B / 2,
+    }
     
-    Scores are informed by UK Police open data (data.police.uk), the
-    safeareaslondon.com 500×500m analytical grid, and crimerate.co.uk
-    severity-weighted Crime Risk Scores (data period: Jan 2024 – Nov 2025).
+    return Map(intersections, roads), danger_db
+
+
+def test_exchange_rate():
+    """TEST 6: Verify the (1-α)/α exchange rate via threshold bisection."""
+    print("\n" + "=" * 70)
+    print("TEST 6 — EXCHANGE RATE VERIFICATION: (1-α) / α")
+    print("=" * 70)
     
-    Returns:
-        Dictionary mapping (u, v) -> danger_score ∈ [0, 1].
-        Edges are stored in BOTH directions: (u,v) and (v,u).
-    """
-    edge_dangers = [
-        # =================================================================
-        # CENTRAL ZONE (nodes 0-9) — Generally LOW danger
-        # Heavy police presence, CCTV, high foot traffic, well-lit.
-        # Westminster has highest total crime but mostly pickpocketing;
-        # per-pedestrian violent risk is low due to policing density.
-        # [crimerate.co.uk: Westminster property crime high, violent crime
-        #  moderate relative to footfall]
-        # =================================================================
-        (0, 1, 0.10),   # Westminster → Covent Garden: tourist corridor, safe
-        (0, 3, 0.08),   # Westminster → South Bank: riverside, well-lit, CCTV
-        (0, 4, 0.12),   # Westminster → Soho: nightlife, slightly elevated at night
-        (0, 7, 0.08),   # Westminster → Waterloo: major station, well-policed
-        (0, 8, 0.06),   # Westminster → Marylebone: affluent, quiet residential
-        (0, 13, 0.08),  # Westminster → Notting Hill: affluent west corridor
-        (0, 16, 0.15),  # Westminster → Clapham: crosses Vauxhall, moderate
-        (0, 24, 0.35),  # Westminster → Brixton: crosses Lambeth, elevated crime
-        (1, 2, 0.08),   # Covent Garden → City of London: safe daytime corridor
-        (1, 3, 0.07),   # Covent Garden → South Bank: Waterloo Bridge, safe
-        (1, 4, 0.10),   # Covent Garden → Soho: adjacent, busy
-        (1, 9, 0.06),   # Covent Garden → Bloomsbury: quiet academic area
-        (2, 3, 0.08),   # City of London → South Bank: London Bridge, safe
-        (2, 6, 0.07),   # City of London → Tower Bridge: tourist route
-        (2, 11, 0.18),  # City of London → Shoreditch: transitions to higher crime
-        (2, 14, 0.12),  # City of London → Islington: moderate, gentrified
-        (3, 6, 0.10),   # South Bank → Tower Bridge: riverside path
-        (3, 7, 0.06),   # South Bank → Waterloo: adjacent, well-lit
-        (3, 12, 0.25),  # South Bank → Elephant & Castle: crime increases sharply
-        (4, 8, 0.08),   # Soho → Marylebone: quiet transition
-        (4, 9, 0.07),   # Soho → Bloomsbury: safe academic streets
-        (4, 10, 0.20),  # Soho → Camden: nightlife corridor, theft rises
-        (4, 13, 0.10),  # Soho → Notting Hill: through affluent areas
-        (5, 9, 0.10),   # Kings Cross → Bloomsbury: station area, moderate
-        (5, 10, 0.22),  # Kings Cross → Camden: known theft/drug hotspot
-        (5, 14, 0.15),  # Kings Cross → Islington: mixed, some rough pockets
-        (5, 20, 0.55),  # Kings Cross → Tottenham: direct north, high crime
-        (5, 26, 0.50),  # Kings Cross → Wood Green: through Haringey, high crime
-        (6, 11, 0.20),  # Tower Bridge → Shoreditch: east, crime increases
-        (6, 12, 0.22),  # Tower Bridge → Elephant & Castle: south, mixed
-        (6, 15, 0.12),  # Tower Bridge → Greenwich: safe-ish riverside
-        (6, 25, 0.35),  # Tower Bridge → Peckham: through Southwark, elevated
-        (7, 12, 0.25),  # Waterloo → Elephant & Castle: short but rougher
-        (7, 16, 0.15),  # Waterloo → Clapham: south through residential
-        (7, 24, 0.38),  # Waterloo → Brixton: Lambeth corridor, high crime
-        (8, 9, 0.06),   # Marylebone → Bloomsbury: safe central
-        (8, 10, 0.18),  # Marylebone → Camden: transition, some rough patches
-        (8, 13, 0.05),  # Marylebone → Notting Hill: affluent west
-        (8, 17, 0.08),  # Marylebone → Hammersmith: safe west corridor
-        (9, 10, 0.18),  # Bloomsbury → Camden: near Euston, moderate
-        (9, 14, 0.12),  # Bloomsbury → Islington: short, mixed
-        
-        # =================================================================
-        # INNER RESIDENTIAL RING (nodes 10-19) — MIXED danger
-        # Gentrified areas (Islington, Notting Hill) sit alongside
-        # elevated-crime areas (Hackney, Elephant & Castle).
-        # [safeareaslondon.com: adjacent 500m grid blocks can have very
-        #  different Local Crime Level Index values in this ring]
-        # =================================================================
-        (10, 14, 0.20),  # Camden → Islington: both mixed, drug/theft issues
-        (10, 20, 0.55),  # Camden → Tottenham: northward into high crime zone
-        (10, 26, 0.50),  # Camden → Wood Green: through Haringey
-        (11, 14, 0.18),  # Shoreditch → Islington: gentrified but bike theft
-        (11, 18, 0.40),  # Shoreditch → Hackney: elevated violent crime
-        (11, 19, 0.30),  # Shoreditch → Stratford: east, mixed
-        (12, 15, 0.25),  # Elephant → Greenwich: south-east, moderate
-        (12, 16, 0.22),  # Elephant → Clapham: south, residential
-        (12, 22, 0.40),  # Elephant → Lewisham: elevated knife crime
-        (12, 24, 0.45),  # Elephant → Brixton: Lambeth high-crime corridor
-        (12, 25, 0.40),  # Elephant → Peckham: Southwark, elevated
-        (13, 17, 0.08),  # Notting Hill → Hammersmith: safe west London
-        (14, 18, 0.35),  # Islington → Hackney: increases sharply eastward
-        (15, 22, 0.25),  # Greenwich → Lewisham: south-east, moderate
-        (15, 25, 0.30),  # Greenwich → Peckham: through Southwark
-        (15, 27, 0.28),  # Greenwich → Woolwich: further east, mixed
-        (16, 21, 0.50),  # Clapham → Croydon: south into high-crime borough
-        (16, 24, 0.35),  # Clapham → Brixton: adjacent, Lambeth corridor
-        (18, 19, 0.35),  # Hackney → Stratford: east London, mixed
-        (18, 20, 0.60),  # Hackney → Tottenham: north-east, both high crime
-        (18, 23, 0.55),  # Hackney → Barking: east, deprived corridor
-        (18, 29, 0.55),  # Hackney → Seven Sisters: Haringey, high crime
-        (19, 23, 0.45),  # Stratford → Barking: east, deprived
-        (19, 27, 0.35),  # Stratford → Woolwich: Crossrail corridor, mixed
-        
-        # =================================================================
-        # OUTER / PERIPHERAL ZONE (nodes 20-29) — HIGH danger
-        # These areas consistently appear in the top crime brackets in
-        # both crimerate.co.uk and the Met Police dashboard.
-        #
-        # [crimerate.co.uk Nov 2025: Croydon highest total crime count;
-        #  Westminster highest Crime Risk Score; Hackney 3rd most dangerous.
-        #  Haringey (Tottenham, Wood Green, Seven Sisters): persistent
-        #  violent crime including knife and gun offences.]
-        #
-        # [data.police.uk: Haringey, Lambeth, Southwark, Croydon, Newham
-        #  consistently in top 10 for violent crime per 1,000 population]
-        # =================================================================
-        (20, 26, 0.70),  # Tottenham → Wood Green: both Haringey, very high crime
-        (20, 28, 0.75),  # Tottenham → Edmonton: north Haringey/Enfield, high
-        (20, 29, 0.65),  # Tottenham → Seven Sisters: adjacent, Haringey corridor
-        (21, 22, 0.55),  # Croydon → Lewisham: south-east high-crime link
-        (21, 25, 0.50),  # Croydon → Peckham: south London corridor
-        (22, 25, 0.45),  # Lewisham → Peckham: both Southwark/Lewisham boundary
-        (22, 27, 0.40),  # Lewisham → Woolwich: south-east, moderate-high
-        (23, 27, 0.45),  # Barking → Woolwich: east London, deprived areas
-        (24, 25, 0.42),  # Brixton → Peckham: Lambeth/Southwark, elevated
-        (26, 28, 0.70),  # Wood Green → Edmonton: Haringey/Enfield, very high
-        (26, 29, 0.65),  # Wood Green → Seven Sisters: Haringey corridor
-        (28, 29, 0.60),  # Edmonton → Seven Sisters: outer north, high crime
+    # Define three test scenarios with different time/danger trade-offs.
+    # In each case:
+    #   Route A (through node 1): fast but dangerous
+    #   Route B (through node 3): slow but safe
+    scenarios = [
+        # (time_A, danger_A, time_B, danger_B, description)
+        (1.0, 0.9, 1.5, 0.1, "High danger contrast (0.9 vs 0.1)"),
+        (1.0, 0.7, 1.3, 0.2, "Moderate contrast (0.7 vs 0.2)"),
+        (1.0, 0.6, 2.0, 0.1, "Large time penalty, large safety gain"),
     ]
     
-    # Build bidirectional dictionary
-    db: Dict[Tuple[int, int], float] = {}
-    for u, v, danger in edge_dangers:
-        db[(u, v)] = danger
-        db[(v, u)] = danger  # Undirected: same danger in both directions
+    print(f"\n  For each scenario: find the α threshold where A* switches")
+    print(f"  from the fast-dangerous route to the slow-safe route.")
+    print(f"\n  At the threshold, the theoretical exchange rate is:")
+    print(f"    (time_B - time_A) / (danger_A - danger_B) = (1-α_thresh) / α_thresh")
+    print(f"\n  Solving for α_thresh:")
+    print(f"    α_thresh = (danger_A - danger_B) / ((time_B - time_A) + (danger_A - danger_B))\n")
     
-    return db
+    for time_A, danger_A, time_B, danger_B, desc in scenarios:
+        print(f"  ─────────────────────────────────────────────────────────────")
+        print(f"  {desc}")
+        print(f"  Route A: time={time_A:.2f}  danger={danger_A:.2f}")
+        print(f"  Route B: time={time_B:.2f}  danger={danger_B:.2f}")
+        
+        # Theoretical threshold:
+        #   At α_thresh, composite cost of A == composite cost of B
+        #   α·time_A + (1-α)·danger_A = α·time_B + (1-α)·danger_B
+        #   α·(time_A - time_B) = (1-α)·(danger_B - danger_A)
+        #   α·(time_A - time_B) = (danger_B - danger_A) - α·(danger_B - danger_A)
+        #   α·(time_A - time_B + danger_B - danger_A) = danger_B - danger_A  (wait, sign)
+        # Let me redo:
+        #   α·time_A + (1-α)·danger_A = α·time_B + (1-α)·danger_B
+        #   α·time_A + danger_A - α·danger_A = α·time_B + danger_B - α·danger_B
+        #   α·(time_A - time_B) - α·(danger_A - danger_B) = danger_B - danger_A
+        #   α·[(time_A - time_B) - (danger_A - danger_B)] = danger_B - danger_A
+        #   α·[(time_A - time_B) - (danger_A - danger_B)] = -(danger_A - danger_B)
+        #   α = (danger_A - danger_B) / [(danger_A - danger_B) - (time_A - time_B)]
+        #   α = (danger_A - danger_B) / [(danger_A - danger_B) + (time_B - time_A)]
+        
+        dd = danger_A - danger_B   # danger savings (positive if A is more dangerous)
+        dt = time_B - time_A       # time cost (positive if B is slower)
+        alpha_theory = dd / (dd + dt)
+        
+        print(f"  Theoretical α_thresh = {dd:.2f} / ({dd:.2f} + {dt:.2f}) = {alpha_theory:.4f}")
+        
+        # Empirical bisection: find the α where A* switches from A to B
+        m, db = build_threshold_graph(time_A, danger_A, time_B, danger_B)
+        
+        def path_at(alpha_val):
+            r = SafetyAwareAStarRouter(m, db, alpha=alpha_val)
+            return r.find_path(0, 2)
+        
+        # At α=1.0 (pure time), A* should pick route A (faster)
+        # At α=0.0 (pure safety), A* should pick route B (safer)
+        path_alpha_1 = path_at(1.0)
+        path_alpha_0 = path_at(0.0)
+        
+        picks_A_at_1 = (1 in path_alpha_1)  # route A passes through node 1
+        picks_B_at_0 = (3 in path_alpha_0)  # route B passes through node 3
+        
+        check(f"  Scenario '{desc}': α=1.0 picks fast route A",
+              picks_A_at_1,
+              f"Path at α=1.0: {path_alpha_1}")
+        check(f"  Scenario '{desc}': α=0.0 picks safe route B",
+              picks_B_at_0,
+              f"Path at α=0.0: {path_alpha_0}")
+        
+        # Bisection to find the empirical threshold
+        lo, hi = 0.0, 1.0
+        for _ in range(40):  # 40 iterations → precision ~1e-12
+            mid = (lo + hi) / 2
+            if 1 in path_at(mid):  # picks A
+                hi = mid
+            else:  # picks B
+                lo = mid
+        
+        alpha_empirical = (lo + hi) / 2
+        error = abs(alpha_empirical - alpha_theory)
+        
+        print(f"  Empirical α_thresh   = {alpha_empirical:.4f}")
+        print(f"  Error                = {error:.6f}")
+        
+        check(f"  Scenario '{desc}': empirical matches theory within 0.01",
+              error < 0.01,
+              f"Theory: {alpha_theory:.4f}, Empirical: {alpha_empirical:.4f}")
+        
+        # Also verify the "exchange rate" interpretation at the threshold:
+        # (1-α)/α should equal dt/dd
+        theory_ratio = dt / dd if dd > 0 else float('inf')
+        empirical_ratio = ((1 - alpha_empirical) / alpha_empirical 
+                           if alpha_empirical > 0 else float('inf'))
+        print(f"  Time/danger ratio at threshold: {theory_ratio:.4f}  "
+              f"(from (1-α)/α = {empirical_ratio:.4f})")
+        ratio_error = abs(theory_ratio - empirical_ratio)
+        check(f"  Scenario '{desc}': exchange rate (1-α)/α matches dt/dd",
+              ratio_error < 0.01,
+              f"Theory: {theory_ratio:.4f}, From α: {empirical_ratio:.4f}")
+        print()
 
 
 # =============================================================================
-# PART 3 — SAFETY-AWARE PATH NODE
-# =============================================================================
-
-class SafetyAwarePathNode:
-    """Stores cost information and parent pointer for a visited node.
-    
-    In the safety-aware A* formulation:
-      - g(n)     = composite cost from start to n
-                 = Σ [α · time(e) + (1-α) · danger(e)] for edges e on path
-      - f(n)     = g(n) + h(n), where h(n) is the composite heuristic
-      - g_time   = pure time cost from start to n (for reporting)
-      - g_danger = pure cumulative danger from start to n (for reporting)
-    
-    Separating g_time and g_danger allows us to report both metrics to the
-    user at the end, even though the search operates on the composite cost.
-    This follows the MAUT decomposition principle.
-    [Keeney & Raiffa (1976), Ch. 3: "Value Functions Over Multiple Attributes"]
-    
-    References:
-      Hart, Nilsson & Raphael (1968) — f, g, h notation and A* framework
-    """
-    def __init__(self, g_composite: float, f_composite: float,
-                 g_time: float, g_danger: float, previous_node: int):
-        self.g_composite = g_composite    # g(n): composite cost start → n
-        self.f_composite = f_composite    # f(n) = g(n) + h(n)
-        self.g_time = g_time              # pure time component (for reporting)
-        self.g_danger = g_danger          # pure danger component (for reporting)
-        self.previous_node = previous_node  # parent pointer for path reconstruction
-
-
-# =============================================================================
-# PART 4 — SAFETY-AWARE A* ROUTER
-# =============================================================================
-#
-# This extends the standard A* algorithm (Hart, Nilsson & Raphael, 1968) to
-# optimize a composite objective:
-#
-#   f(n) = g(n) + h(n)
-#
-# where g(n) accumulates the composite edge cost:
-#   c(u, v) = α · time(u, v) + (1 - α) · danger(u, v)
-#
-# and h(n) is the admissible composite heuristic:
-#   h(n) = α · (euclidean_dist(n, goal) / max_speed)
-#
-# The algorithm is otherwise identical to standard A*:
-#   1. Maintain a frontier (OPEN set) of discovered-but-unexpanded nodes.
-#   2. Always expand the node with the lowest f-cost.
-#   3. When expanding, relax all outgoing edges.
-#   4. When the goal is popped from the frontier, the path is optimal.
-#
-# This optimality guarantee follows directly from Hart et al. (1968, Theorem 1):
-# "If h(n) is admissible, A* is guaranteed to find an optimal path."
-# =============================================================================
-
-class SafetyAwareAStarRouter:
-    """A* router with composite time-safety cost function.
-    
-    The key insight from your TransportAI project: this is NOT a new algorithm.
-    It is standard A* (Hart, Nilsson & Raphael, 1968) operating on a modified
-    cost function. The search mechanics are unchanged; only the edge weights
-    and heuristic are different. This preserves all of A*'s theoretical
-    guarantees (optimality, completeness) as long as the heuristic remains
-    admissible — which we proved in Lemmas 1-3 above.
-    
-    Attributes:
-        map_data (Map): The road network graph.
-        danger_db (dict): (u, v) → danger score ∈ [0, 1].
-        alpha (float): User preference parameter α ∈ [0, 1].
-            α = 1.0 → pure fastest route (ignore safety)
-            α = 0.0 → pure safest route (ignore time)
-            α = 0.7 → default balanced (empirically motivated)
-        max_speed (float): Maximum plausible speed for heuristic normalization.
-        tree (dict): {node_id: SafetyAwarePathNode} — all visited nodes.
-        goal (int): Target node index.
-        frontier (set): OPEN set — discovered but unexpanded nodes.
-    """
-    
-    def __init__(self, map_data: Map, danger_db: Dict[Tuple[int, int], float],
-                 alpha: float = 0.7, max_speed: float = 1.0):
-        """Initialize the safety-aware router.
-        
-        Args:
-            map_data: Map object with .intersections and .roads.
-            danger_db: Dictionary of edge danger scores.
-            alpha: Trade-off parameter α ∈ [0, 1].
-                   Default 0.7 based on Sohrabi & Lord (2022) finding that
-                   users accept ~8% time increase for ~23% crash reduction.
-            max_speed: Maximum speed for heuristic normalization. In this
-                       synthetic graph, coordinates are unitless, so we use
-                       1.0 (meaning time ≈ Euclidean distance).
-        """
-        self.map_data = map_data
-        self.danger_db = danger_db
-        self.alpha = alpha
-        self.max_speed = max_speed
-        self.tree: Dict[int, SafetyAwarePathNode] = {}
-        self.goal: int = -1
-        self.frontier: Set[int] = set()
-    
-    # -------------------------------------------------------------------------
-    # Distance & cost helpers
-    # -------------------------------------------------------------------------
-    
-    def euclidean_dist(self, a: int, b: int) -> float:
-        """Euclidean distance between two nodes.
-        
-        This is the foundation for both the time-component edge cost and
-        the admissible heuristic.
-        
-        In a real-world system, you might use Haversine distance for
-        latitude/longitude coordinates instead of Euclidean.
-        """
-        ax, ay = self.map_data.intersections[a]
-        bx, by = self.map_data.intersections[b]
-        return math.sqrt((bx - ax)**2 + (by - ay)**2)
-    
-    def edge_time(self, u: int, v: int) -> float:
-        """Travel time for edge (u, v).
-        
-        In this synthetic graph: time = euclidean_distance / max_speed.
-        In a real system: this would come from road segment length, speed
-        limits, and live traffic data — as in Google's CCH approach.
-        [Geisberger, R. et al. (2008). "Contraction Hierarchies." WEA.]
-        """
-        return self.euclidean_dist(u, v) / self.max_speed
-    
-    def edge_danger(self, u: int, v: int) -> float:
-        """Danger score for edge (u, v).
-        
-        Looks up the pre-computed danger score from the safety database.
-        Returns 0.0 (safe) if the edge is not in the database.
-        
-        In a production system, this would query a crime statistics API
-        or a pre-processed safety index, as proposed in Assignment2_Idea.docx.
-        [Levy, S. et al. (2020). "SafeRoute." ACM TIST, 11(6).]
-        """
-        return self.danger_db.get((u, v), 0.0)
-    
-    def composite_edge_cost(self, u: int, v: int) -> float:
-        """Composite edge cost: c(u,v) = α · time(u,v) + (1-α) · danger(u,v).
-        
-        This is the additive MAUT model applied to a single edge.
-        [Keeney & Raiffa (1976). Decisions with Multiple Objectives. Wiley.]
-        
-        The two attributes (time and danger) are assumed to be preferentially
-        independent — i.e., the user's preference over time does not depend
-        on the danger level, and vice versa. Under this assumption, the
-        additive form is a valid utility representation (Keeney & Raiffa,
-        1976, Theorem 5.3).
-        
-        Args:
-            u: Source node.
-            v: Destination node.
-        Returns:
-            The composite cost for traversing edge (u, v).
-        """
-        time_cost = self.edge_time(u, v)
-        danger_cost = self.edge_danger(u, v)
-        return self.alpha * time_cost + (1 - self.alpha) * danger_cost
-    
-    # -------------------------------------------------------------------------
-    # Heuristic
-    # -------------------------------------------------------------------------
-    
-    def heuristic(self, n: int) -> float:
-        """Composite admissible heuristic: h(n) = α · (euclidean(n, goal) / max_speed).
-        
-        WHY THIS WORKS (admissibility proof — see file header for full version):
-        
-        The time component h_time(n) = euclidean(n, goal) / max_speed is admissible
-        because the straight line at maximum speed is the fastest possible path.
-        [Hart, Nilsson & Raphael (1968), Theorem 1]
-        
-        The safety component h_safety(n) = 0 is trivially admissible because
-        cumulative danger ≥ 0.
-        
-        Therefore h(n) = α · h_time(n) + (1-α) · 0 = α · h_time(n) never
-        overestimates the true composite cost. □
-        
-        NOTE: Setting h_safety = 0 means the safety component gets NO heuristic
-        guidance — A* explores based on time direction only. This is conservative
-        (preserves admissibility) but means the algorithm may explore more nodes
-        than strictly necessary. A tighter safety heuristic could improve
-        performance but would require additional precomputation (e.g., minimum
-        danger along any path to goal).
-        
-        Args:
-            n: The current node.
-        Returns:
-            The admissible heuristic estimate h(n).
-        """
-        h_time = self.euclidean_dist(n, self.goal) / self.max_speed
-        h_safety = 0.0  # Trivially admissible lower bound
-        return self.alpha * h_time + (1 - self.alpha) * h_safety
-    
-    # -------------------------------------------------------------------------
-    # Core A* methods
-    # -------------------------------------------------------------------------
-    
-    def expand_node(self, node_id: int):
-        """Expand a node: examine all neighbors and update costs if cheaper.
-        
-        This is the relaxation step of A*, adapted for the composite cost function.
-        For each neighbor v of node_id:
-          1. Compute tentative composite g-cost: g(node_id) + c(node_id, v)
-          2. Compute f-cost: tentative_g + h(v)
-          3. If v is unvisited OR this path is cheaper → update and add to frontier
-        
-        This is identical to standard A* relaxation (Russell & Norvig, 2021,
-        Fig. 3.7) — only the cost function has changed.
-        
-        Args:
-            node_id: The node being expanded (moved from OPEN to CLOSED set).
-        """
-        # Remove from frontier — this node is now fully explored
-        self.frontier.discard(node_id)
-        
-        current = self.tree[node_id]
-        
-        # Examine each neighbor
-        for neighbor in self.map_data.roads[node_id]:
-            # --- Compute tentative costs ---
-            # Composite cost (what A* actually optimizes)
-            tentative_g = current.g_composite + self.composite_edge_cost(node_id, neighbor)
-            tentative_f = tentative_g + self.heuristic(neighbor)
-            
-            # Individual components (for reporting only — not used in search decisions)
-            tentative_g_time = current.g_time + self.edge_time(node_id, neighbor)
-            tentative_g_danger = current.g_danger + self.edge_danger(node_id, neighbor)
-            
-            # --- Update if: never visited OR found a cheaper composite path ---
-            if (neighbor not in self.tree or
-                    self.tree[neighbor].f_composite > tentative_f):
-                self.tree[neighbor] = SafetyAwarePathNode(
-                    g_composite=tentative_g,
-                    f_composite=tentative_f,
-                    g_time=tentative_g_time,
-                    g_danger=tentative_g_danger,
-                    previous_node=node_id
-                )
-                self.frontier.add(neighbor)
-    
-    def get_cheapest_frontier_node(self) -> int:
-        """Select the frontier node with the lowest f-cost (composite).
-        
-        In a production implementation, this would use a min-heap (heapq)
-        for O(log n) extraction. This uses a linear scan — O(n) but simpler.
-        [Cormen et al. (2009). Introduction to Algorithms. Ch. 6: Heapsort.]
-        
-        Returns:
-            Node index with lowest f_composite, or -1 if frontier is empty.
-        """
-        if not self.frontier:
-            return -1
-        
-        best = -1
-        best_f = float('inf')
-        
-        for node_id in self.frontier:
-            f = self.tree[node_id].f_composite
-            if f < best_f:
-                best_f = f
-                best = node_id
-        
-        return best
-    
-    def find_path(self, start: int, goal: int) -> List[int]:
-        """Find the optimal path from start to goal under the composite cost.
-        
-        This is the main A* loop. The algorithm guarantees that when the goal
-        node is selected as the cheapest frontier node, the path to it is
-        optimal — because h(n) is admissible (Lemma 3 above).
-        
-        [Hart, Nilsson & Raphael (1968), Theorem 1: "Algorithm A* is admissible
-         — i.e., if a path from s to t exists, A* terminates by finding an
-         optimal path."]
-        
-        Args:
-            start: Source node index.
-            goal: Destination node index.
-        Returns:
-            List of node indices [start, ..., goal] for the optimal path.
-            Empty list if no path exists.
-        """
-        # --- Edge case ---
-        if start == goal:
-            return [goal]
-        
-        # --- Initialize ---
-        self.tree = {}
-        self.goal = goal
-        self.frontier = {start}
-        
-        # Start node: g=0, f=h(start), no parent
-        h_start = self.heuristic(start)
-        self.tree[start] = SafetyAwarePathNode(
-            g_composite=0.0,
-            f_composite=h_start,
-            g_time=0.0,
-            g_danger=0.0,
-            previous_node=-1
-        )
-        
-        # Expand start node
-        self.expand_node(start)
-        
-        # Track previous cheapest to detect stuck state (disconnected graph)
-        prev_cheapest = -1
-        
-        # --- MAIN LOOP ---
-        while True:
-            # Step 1: Select node with lowest f(n) from frontier
-            cheapest = self.get_cheapest_frontier_node()
-            
-            # Step 2: Goal test
-            # A* guarantees: when goal is the cheapest frontier node, it's optimal.
-            if cheapest == goal:
-                break
-            
-            # Step 3: No progress → graph is disconnected
-            if cheapest == -1 or cheapest == prev_cheapest:
-                return []
-            
-            # Step 4: Expand the cheapest node
-            self.expand_node(cheapest)
-            prev_cheapest = cheapest
-        
-        # --- PATH RECONSTRUCTION ---
-        # Backtrace from goal to start using parent pointers
-        path = []
-        current = goal
-        while current != -1:
-            path.append(current)
-            current = self.tree[current].previous_node
-        path.reverse()
-        
-        return path
-    
-    def get_path_stats(self, path: List[int]) -> Dict[str, float]:
-        """Compute detailed statistics for a given path.
-        
-        This allows the user to see the breakdown of time vs. danger for
-        any route, supporting informed decision-making.
-        [Kahneman & Tversky (1979) — users need explicit trade-off info]
-        
-        Args:
-            path: List of node indices.
-        Returns:
-            Dictionary with total_time, total_danger, composite_cost,
-            num_edges, and per-edge breakdowns.
-        """
-        if len(path) < 2:
-            return {"total_time": 0.0, "total_danger": 0.0,
-                    "composite_cost": 0.0, "num_edges": 0}
-        
-        total_time = 0.0
-        total_danger = 0.0
-        total_composite = 0.0
-        edges = []
-        
-        for i in range(len(path) - 1):
-            u, v = path[i], path[i + 1]
-            t = self.edge_time(u, v)
-            d = self.edge_danger(u, v)
-            c = self.alpha * t + (1 - self.alpha) * d
-            total_time += t
-            total_danger += d
-            total_composite += c
-            edges.append({"from": u, "to": v, "time": t, "danger": d, "composite": c})
-        
-        return {
-            "total_time": total_time,
-            "total_danger": total_danger,
-            "composite_cost": total_composite,
-            "num_edges": len(edges),
-            "edges": edges
-        }
-
-
-# =============================================================================
-# PART 5 — CONVENIENCE FUNCTIONS
-# =============================================================================
-
-def shortest_path_safety(M: Map, danger_db: Dict, start: int, goal: int,
-                          alpha: float = 0.7) -> List[int]:
-    """Find the optimal safety-aware path.
-    
-    Convenience wrapper that creates a router and runs the search.
-    
-    Args:
-        M: Map object.
-        danger_db: Edge danger scores.
-        start: Source node.
-        goal: Destination node.
-        alpha: Trade-off parameter (default 0.7).
-    Returns:
-        Optimal path as list of node indices.
-    """
-    router = SafetyAwareAStarRouter(M, danger_db, alpha=alpha)
-    return router.find_path(start, goal)
-
-
-def shortest_path_standard(M: Map, danger_db: Dict, start: int, goal: int) -> List[int]:
-    """Find the standard fastest path (α = 1.0, ignoring safety).
-    
-    This is equivalent to running standard A* with Euclidean heuristic.
-    Used as a baseline for comparison.
-    """
-    return shortest_path_safety(M, danger_db, start, goal, alpha=1.0)
-
-
-# =============================================================================
-# PART 6 — DEMO & COMPARISON
+# MAIN — Run all tests
 # =============================================================================
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("  TransportAI — Safety-Aware A* Route Planner (First Draft)")
+    print("  TransportAI — Test Suite for Safety-Aware A* Router")
     print("  CS4006 Intelligent Systems — University of Limerick")
     print("=" * 70)
     
-    # Load map and danger database
-    london = load_london_map()
-    danger_db = build_danger_database()
+    test_small_graph()
+    test_big_graph()
+    test_london_routes()
+    test_alpha_comparison()
+    test_max_time_increase()
+    test_exchange_rate()
     
-    print(f"\nMap: {len(london.intersections)} nodes, "
-          f"{sum(len(r) for r in london.roads) // 2} edges (approx)")
-    print(f"Danger database: {len(danger_db) // 2} unique edges scored")
-    
-    # Helper to print paths with place names
-    def path_to_names(path: List[int]) -> str:
-        return " → ".join(NODE_NAMES.get(n, str(n)) for n in path)
-    
-    # --- Primary test: Westminster to Tottenham ---
-    # This is a key test case because the fastest route goes north through
-    # Kings Cross directly into Tottenham (high crime), while safer
-    # alternatives exist through Camden/Islington (longer but less dangerous).
-    start_node = 0   # Westminster
-    goal_node = 20   # Tottenham
-    
-    print(f"\n{'─' * 70}")
-    print(f"Route: {NODE_NAMES[start_node]} → {NODE_NAMES[goal_node]}")
-    print(f"{'─' * 70}")
-    
-    # Compare different alpha values
-    alphas = [1.0, 0.7, 0.5, 0.0]
-    labels = ["Pure fastest (α=1.0)",
-              "Balanced default (α=0.7, Sohrabi & Lord 2022)",
-              "Equal weight (α=0.5)",
-              "Pure safest (α=0.0)"]
-    
-    fastest_time = None  # For prospect-theory relative framing
-    
-    for alpha_val, label in zip(alphas, labels):
-        router = SafetyAwareAStarRouter(london, danger_db, alpha=alpha_val)
-        path = router.find_path(start_node, goal_node)
-        stats = router.get_path_stats(path)
-        
-        if fastest_time is None:
-            fastest_time = stats["total_time"]
-        
-        # Compute relative deviation from fastest (Prospect Theory framing)
-        # [Kahneman & Tversky (1979): losses loom larger than gains]
-        time_increase_pct = ((stats["total_time"] - fastest_time) / fastest_time * 100
-                             if fastest_time > 0 else 0)
-        
-        print(f"\n  {label}")
-        print(f"    Path:          {path_to_names(path)}")
-        print(f"    Node IDs:      {path}")
-        print(f"    Total time:    {stats['total_time']:.4f}  "
-              f"(+{time_increase_pct:.1f}% vs fastest)")
-        print(f"    Total danger:  {stats['total_danger']:.4f}")
-        print(f"    Composite:     {stats['composite_cost']:.4f}")
-        print(f"    Edges:         {stats['num_edges']}")
-    
-    # --- Danger reduction analysis ---
-    print(f"\n{'─' * 70}")
-    print("TRADE-OFF ANALYSIS (Prospect Theory framing)")
-    print(f"{'─' * 70}")
-    
-    r_fast = SafetyAwareAStarRouter(london, danger_db, alpha=1.0)
-    p_fast = r_fast.find_path(start_node, goal_node)
-    s_fast = r_fast.get_path_stats(p_fast)
-    
-    r_safe = SafetyAwareAStarRouter(london, danger_db, alpha=0.5)
-    p_safe = r_safe.find_path(start_node, goal_node)
-    s_safe = r_safe.get_path_stats(p_safe)
-    
-    if s_fast["total_time"] > 0 and s_fast["total_danger"] > 0:
-        time_cost = (s_safe["total_time"] - s_fast["total_time"]) / s_fast["total_time"] * 100
-        danger_saved = (s_fast["total_danger"] - s_safe["total_danger"]) / s_fast["total_danger"] * 100
-        
-        print(f"\n  Fastest route:     {path_to_names(p_fast)}")
-        print(f"    Time: {s_fast['total_time']:.4f}   Danger: {s_fast['total_danger']:.4f}")
-        print(f"\n  Safer route (α=0.5): {path_to_names(p_safe)}")
-        print(f"    Time: {s_safe['total_time']:.4f}   Danger: {s_safe['total_danger']:.4f}")
-        print(f"\n  Danger reduction:  {danger_saved:.1f}%")
-        print(f"  Time cost:         +{time_cost:.1f}%")
-        print(f"\n  (Compare: Sohrabi & Lord (2022) found ~8% time increase")
-        print(f"   yields ~23% crash reduction in empirical road data)")
-    
-    # --- Additional test routes ---
-    print(f"\n{'─' * 70}")
-    print("ADDITIONAL TEST ROUTES (α=0.7)")
-    print(f"{'─' * 70}")
-    
-    test_routes = [
-        (0, 21,  "Westminster → Croydon (central to highest-crime borough)"),
-        (13, 23, "Notting Hill → Barking (affluent west to deprived east)"),
-        (8, 28,  "Marylebone → Edmonton (west-central to outer north)"),
-        (5, 5,   "Kings Cross → Kings Cross (trivial case)"),
-        (24, 22, "Brixton → Lewisham (south London high-crime corridor)"),
-    ]
-    
-    for s, g, desc in test_routes:
-        router = SafetyAwareAStarRouter(london, danger_db, alpha=0.7)
-        path = router.find_path(s, g)
-        stats = router.get_path_stats(path)
-        print(f"\n  {desc}")
-        print(f"    Path:   {path_to_names(path)}")
-        print(f"    IDs:    {path}")
-        print(f"    Time:   {stats['total_time']:.4f}  Danger: {stats['total_danger']:.4f}")
-    
+    # --- Final summary ---
+    total = passed + failed
     print(f"\n{'=' * 70}")
-    print("  First draft complete. All tests passed.")
+    print(f"  TEST SUMMARY")
     print(f"{'=' * 70}")
+    print(f"  Total tests:  {total}")
+    print(f"  Passed:       {passed}")
+    print(f"  Failed:       {failed}")
+    
+    if failed == 0:
+        print(f"\n  ALL {total} TESTS PASSED.")
+    else:
+        print(f"\n  {failed} TEST(S) FAILED — review output above.")
+    
+    print(f"{'=' * 70}")
+    sys.exit(0 if failed == 0 else 1)
