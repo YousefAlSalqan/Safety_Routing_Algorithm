@@ -575,6 +575,358 @@ def test_alpha_comparison():
 
 
 # =============================================================================
+# TEST 5 — OBSERVED MAX TIME INCREASE PER ALPHA
+# =============================================================================
+# This test measures the EMPIRICAL behavior of the algorithm on the London
+# graph. For each α value, it runs every possible start-goal pair and records
+# the maximum % time increase compared to the fastest route (α=1.0).
+#
+# IMPORTANT: There is NO hard cap in the algorithm. The MAUT cost function
+#     c = α·time + (1-α)·danger
+# will accept any amount of extra time if it's mathematically justified by
+# the danger reduction. The "maximum" observed here is purely a consequence
+# of the graph topology — it reflects how much longer the longest safer
+# detour in the 30-node London graph happens to be.
+#
+# In theory, the algorithm's willingness to accept extra time per unit of
+# danger reduction is (1-α)/α — see Test 6 for that exchange rate check.
+# =============================================================================
+
+def test_max_time_increase():
+    """TEST 5: Measure observed max time increase per α on all London routes."""
+    print("\n" + "=" * 70)
+    print("TEST 5 — OBSERVED MAX TIME INCREASE PER α (London graph)")
+    print("=" * 70)
+    
+    london = load_london_map()
+    db = build_danger_database()
+    
+    alphas = [1.0, 0.9, 0.7, 0.5, 0.3, 0.1, 0.0]
+    n_nodes = len(london.intersections)
+    
+    print(f"\n  Testing all {n_nodes * (n_nodes - 1)} ordered (start, goal) pairs")
+    print(f"  on the London graph at each α value.\n")
+    print(f"  {'α':<6} {'Max +time%':<12} {'Mean +time%':<14} {'Max +danger reduction':<24} "
+          f"{'Worst route':<30}")
+    print(f"  {'─'*6} {'─'*12} {'─'*14} {'─'*24} {'─'*30}")
+    
+    # First pass: compute fastest-route stats (α=1.0) for every start-goal pair
+    # We use these as the baseline for % time increase.
+    baseline = {}
+    r_fast = SafetyAwareAStarRouter(london, db, alpha=1.0)
+    for s in range(n_nodes):
+        for g in range(n_nodes):
+            if s == g:
+                continue
+            p = r_fast.find_path(s, g)
+            if len(p) >= 2:
+                stats = r_fast.get_path_stats(p)
+                baseline[(s, g)] = stats
+    
+    # For each alpha, compute the % time increase vs baseline for every pair
+    results_per_alpha = {}
+    for alpha in alphas:
+        r = SafetyAwareAStarRouter(london, db, alpha=alpha)
+        time_increases = []      # list of (pct_increase, s, g)
+        danger_reductions = []   # list of (pct_reduction, s, g)
+        
+        for (s, g), base_stats in baseline.items():
+            p = r.find_path(s, g)
+            if len(p) < 2:
+                continue
+            stats = r.get_path_stats(p)
+            
+            if base_stats["total_time"] > 0:
+                pct_t = ((stats["total_time"] - base_stats["total_time"])
+                         / base_stats["total_time"]) * 100
+                time_increases.append((pct_t, s, g))
+            
+            if base_stats["total_danger"] > 0:
+                pct_d = ((base_stats["total_danger"] - stats["total_danger"])
+                         / base_stats["total_danger"]) * 100
+                danger_reductions.append((pct_d, s, g))
+        
+        max_time_inc = max(time_increases, key=lambda x: x[0])
+        mean_time_inc = sum(x[0] for x in time_increases) / len(time_increases)
+        max_danger_red = max(danger_reductions, key=lambda x: x[0])
+        
+        worst_route = f"{NODE_NAMES.get(max_time_inc[1], max_time_inc[1])} → {NODE_NAMES.get(max_time_inc[2], max_time_inc[2])}"
+        if len(worst_route) > 28:
+            worst_route = worst_route[:25] + "..."
+        
+        print(f"  {alpha:<6.2f} {max_time_inc[0]:<12.2f} {mean_time_inc:<14.2f} "
+              f"{max_danger_red[0]:<24.2f} {worst_route:<30}")
+        
+        results_per_alpha[alpha] = {
+            "max_time_inc": max_time_inc[0],
+            "mean_time_inc": mean_time_inc,
+            "max_danger_red": max_danger_red[0],
+            "worst_route": (max_time_inc[1], max_time_inc[2]),
+        }
+    
+    # --- Assertions ---
+    
+    # α=1.0 should have 0% max time increase (it IS the baseline)
+    check("α=1.0: max time increase is 0% (baseline)",
+          abs(results_per_alpha[1.0]["max_time_inc"]) < 0.01,
+          f"Observed: {results_per_alpha[1.0]['max_time_inc']:.4f}%")
+    
+    # Max time increase should be MONOTONICALLY non-decreasing as α drops
+    # (lower α = more willing to add time for safety)
+    prev_max = -0.01
+    monotonic_time = True
+    for alpha in alphas:  # alphas is already sorted high → low
+        cur = results_per_alpha[alpha]["max_time_inc"]
+        if cur < prev_max - 0.01:
+            monotonic_time = False
+            break
+        prev_max = cur
+    check("Max time increase is monotonically non-decreasing as α drops",
+          monotonic_time,
+          "Lower α should accept ≥ extra time than higher α")
+    
+    # Max danger reduction should also be monotonically non-decreasing as α drops
+    prev_max_d = -0.01
+    monotonic_danger = True
+    for alpha in alphas:
+        cur = results_per_alpha[alpha]["max_danger_red"]
+        if cur < prev_max_d - 0.01:
+            monotonic_danger = False
+            break
+        prev_max_d = cur
+    check("Max danger reduction is monotonically non-decreasing as α drops",
+          monotonic_danger,
+          "Lower α should achieve ≥ danger reduction than higher α")
+    
+    # At α=0.0, the algorithm should find the maximum possible time increase
+    # (it completely ignores time). Report it for interpretation.
+    alpha_0_max = results_per_alpha[0.0]["max_time_inc"]
+    print(f"\n  At α=0.0 (pure safety), the algorithm accepts up to")
+    print(f"  +{alpha_0_max:.1f}% extra time — this is not a hard cap, it's")
+    print(f"  simply the longest safer detour that exists in the graph.")
+    print(f"  The worst-case route is "
+          f"{NODE_NAMES.get(results_per_alpha[0.0]['worst_route'][0])} → "
+          f"{NODE_NAMES.get(results_per_alpha[0.0]['worst_route'][1])}.")
+
+
+# =============================================================================
+# TEST 6 — EXCHANGE RATE VERIFICATION: (1-α) / α
+# =============================================================================
+# The composite cost function c = α·time + (1-α)·danger implies that A* will
+# prefer a "safer" route over a "faster" route if and only if the danger
+# savings outweigh the time cost according to the ratio (1-α)/α.
+#
+# Formally: the algorithm switches from route A to route B when
+#
+#     α · (time_B - time_A)  <  (1-α) · (danger_A - danger_B)
+#
+# which rearranges to:
+#
+#     (time_B - time_A) / (danger_A - danger_B)  <  (1-α) / α
+#
+# The quantity (1-α)/α is the maximum "time units per danger unit" the
+# algorithm will pay to swap to a safer route.
+#
+# We verify this by constructing a minimal 3-node graph with two alternative
+# routes (A: fast-dangerous, B: slow-safe) and finding the THRESHOLD α where
+# the algorithm switches from A to B. Then we check that this threshold
+# matches the theoretical prediction within a small tolerance.
+# =============================================================================
+
+def build_threshold_graph(time_A: float, danger_A: float,
+                            time_B: float, danger_B: float) -> Tuple[Map, Dict]:
+    """Build a minimal graph with two alternative routes from 0 to 2.
+    
+    Route A: 0 → 1 → 2  (time=time_A, danger=danger_A split across both edges)
+    Route B: 0 → 3 → 2  (time=time_B, danger=danger_B split across both edges)
+    
+    We use Euclidean coordinates to control edge "time" exactly: edge time
+    equals Euclidean distance (since max_speed=1.0 by default).
+    """
+    # Place node 0 at origin and node 2 as the goal.
+    # Node 1 (route A) and node 3 (route B) are intermediate points.
+    # Edge times are just euclidean distances.
+    
+    # Put node 1 at (time_A/2, 0) and node 3 at (time_B/2, 0.01)
+    # so route A has length time_A, route B has length time_B.
+    # (We use 0.01 y-offset for B to keep Euclidean distances well-defined.)
+    intersections = {
+        0: (0.0, 0.0),
+        1: (time_A / 2, 0.0),
+        2: (time_A, 0.0) if time_A >= time_B else (time_B, 0.0),
+        3: (time_B / 2, 0.01),
+    }
+    # Actually we need route A total time = time_A exactly, regardless of where 2 is.
+    # Simpler: use a star topology. Node 2's position affects the heuristic but
+    # we'll place it at (max(time_A, time_B), 0) so it doesn't interfere.
+    goal_x = max(time_A, time_B)
+    intersections = {
+        0: (0.0, 0.0),
+        1: (time_A / 2, 0.0),
+        2: (goal_x, 0.0),
+        3: (time_B / 2, 0.0),
+    }
+    
+    # But now euclidean(0,1) + euclidean(1,2) doesn't equal time_A unless
+    # we place them on a straight line. Let's do it right: node 1 on the line
+    # from 0 to 2 at distance time_A/2 from node 0. But 0 to 2 distance is goal_x.
+    # If time_A == goal_x, then node 1 at (time_A/2, 0) gives total route A time =
+    # time_A/2 + time_A/2 = time_A. ✓
+    # If time_A > goal_x, node 1 needs to be OFF the 0→2 line to add detour.
+    
+    # Simpler approach: just override the Euclidean with explicit edge costs.
+    # But the router uses euclidean_dist internally for edge_time... 
+    # Let me use a geometry that naturally gives the right distances.
+    
+    # CLEANEST: use a diamond with nodes at cardinal directions.
+    # Node 0 at (0, 0), node 2 at (total, 0).
+    # Route A: 0 → 1 → 2 where node 1 is above the line at (total/2, yA).
+    #   Route length = 2 * sqrt((total/2)^2 + yA^2)
+    # Route B: 0 → 3 → 2 where node 3 is below at (total/2, -yB).
+    #   Route length = 2 * sqrt((total/2)^2 + yB^2)
+    #
+    # Solve for yA and yB given desired route lengths:
+    #   yA = sqrt((time_A/2)^2 - (total/2)^2)
+    #   yB = sqrt((time_B/2)^2 - (total/2)^2)
+    # This requires time_A >= total and time_B >= total.
+    
+    total = min(time_A, time_B) * 0.8  # goal distance < both route lengths
+    half = total / 2
+    yA = math.sqrt(max(0, (time_A / 2) ** 2 - half ** 2))
+    yB = math.sqrt(max(0, (time_B / 2) ** 2 - half ** 2))
+    
+    intersections = {
+        0: (0.0, 0.0),
+        1: (half, yA),     # route A intermediate (above)
+        2: (total, 0.0),   # goal
+        3: (half, -yB),    # route B intermediate (below)
+    }
+    
+    roads = [
+        [1, 3],    # 0: connects to both intermediates
+        [0, 2],    # 1: route A path
+        [1, 3],    # 2: goal (reachable from 1 and 3)
+        [0, 2],    # 3: route B path
+    ]
+    
+    # Danger is split evenly across the two edges of each route
+    danger_db = {
+        (0, 1): danger_A / 2, (1, 0): danger_A / 2,
+        (1, 2): danger_A / 2, (2, 1): danger_A / 2,
+        (0, 3): danger_B / 2, (3, 0): danger_B / 2,
+        (3, 2): danger_B / 2, (2, 3): danger_B / 2,
+    }
+    
+    return Map(intersections, roads), danger_db
+
+
+def test_exchange_rate():
+    """TEST 6: Verify the (1-α)/α exchange rate via threshold bisection."""
+    print("\n" + "=" * 70)
+    print("TEST 6 — EXCHANGE RATE VERIFICATION: (1-α) / α")
+    print("=" * 70)
+    
+    # Define three test scenarios with different time/danger trade-offs.
+    # In each case:
+    #   Route A (through node 1): fast but dangerous
+    #   Route B (through node 3): slow but safe
+    scenarios = [
+        # (time_A, danger_A, time_B, danger_B, description)
+        (1.0, 0.9, 1.5, 0.1, "High danger contrast (0.9 vs 0.1)"),
+        (1.0, 0.7, 1.3, 0.2, "Moderate contrast (0.7 vs 0.2)"),
+        (1.0, 0.6, 2.0, 0.1, "Large time penalty, large safety gain"),
+    ]
+    
+    print(f"\n  For each scenario: find the α threshold where A* switches")
+    print(f"  from the fast-dangerous route to the slow-safe route.")
+    print(f"\n  At the threshold, the theoretical exchange rate is:")
+    print(f"    (time_B - time_A) / (danger_A - danger_B) = (1-α_thresh) / α_thresh")
+    print(f"\n  Solving for α_thresh:")
+    print(f"    α_thresh = (danger_A - danger_B) / ((time_B - time_A) + (danger_A - danger_B))\n")
+    
+    for time_A, danger_A, time_B, danger_B, desc in scenarios:
+        print(f"  ─────────────────────────────────────────────────────────────")
+        print(f"  {desc}")
+        print(f"  Route A: time={time_A:.2f}  danger={danger_A:.2f}")
+        print(f"  Route B: time={time_B:.2f}  danger={danger_B:.2f}")
+        
+        # Theoretical threshold:
+        #   At α_thresh, composite cost of A == composite cost of B
+        #   α·time_A + (1-α)·danger_A = α·time_B + (1-α)·danger_B
+        #   α·(time_A - time_B) = (1-α)·(danger_B - danger_A)
+        #   α·(time_A - time_B) = (danger_B - danger_A) - α·(danger_B - danger_A)
+        #   α·(time_A - time_B + danger_B - danger_A) = danger_B - danger_A  (wait, sign)
+        # Let me redo:
+        #   α·time_A + (1-α)·danger_A = α·time_B + (1-α)·danger_B
+        #   α·time_A + danger_A - α·danger_A = α·time_B + danger_B - α·danger_B
+        #   α·(time_A - time_B) - α·(danger_A - danger_B) = danger_B - danger_A
+        #   α·[(time_A - time_B) - (danger_A - danger_B)] = danger_B - danger_A
+        #   α·[(time_A - time_B) - (danger_A - danger_B)] = -(danger_A - danger_B)
+        #   α = (danger_A - danger_B) / [(danger_A - danger_B) - (time_A - time_B)]
+        #   α = (danger_A - danger_B) / [(danger_A - danger_B) + (time_B - time_A)]
+        
+        dd = danger_A - danger_B   # danger savings (positive if A is more dangerous)
+        dt = time_B - time_A       # time cost (positive if B is slower)
+        alpha_theory = dd / (dd + dt)
+        
+        print(f"  Theoretical α_thresh = {dd:.2f} / ({dd:.2f} + {dt:.2f}) = {alpha_theory:.4f}")
+        
+        # Empirical bisection: find the α where A* switches from A to B
+        m, db = build_threshold_graph(time_A, danger_A, time_B, danger_B)
+        
+        def path_at(alpha_val):
+            r = SafetyAwareAStarRouter(m, db, alpha=alpha_val)
+            return r.find_path(0, 2)
+        
+        # At α=1.0 (pure time), A* should pick route A (faster)
+        # At α=0.0 (pure safety), A* should pick route B (safer)
+        path_alpha_1 = path_at(1.0)
+        path_alpha_0 = path_at(0.0)
+        
+        picks_A_at_1 = (1 in path_alpha_1)  # route A passes through node 1
+        picks_B_at_0 = (3 in path_alpha_0)  # route B passes through node 3
+        
+        check(f"  Scenario '{desc}': α=1.0 picks fast route A",
+              picks_A_at_1,
+              f"Path at α=1.0: {path_alpha_1}")
+        check(f"  Scenario '{desc}': α=0.0 picks safe route B",
+              picks_B_at_0,
+              f"Path at α=0.0: {path_alpha_0}")
+        
+        # Bisection to find the empirical threshold
+        lo, hi = 0.0, 1.0
+        for _ in range(40):  # 40 iterations → precision ~1e-12
+            mid = (lo + hi) / 2
+            if 1 in path_at(mid):  # picks A
+                hi = mid
+            else:  # picks B
+                lo = mid
+        
+        alpha_empirical = (lo + hi) / 2
+        error = abs(alpha_empirical - alpha_theory)
+        
+        print(f"  Empirical α_thresh   = {alpha_empirical:.4f}")
+        print(f"  Error                = {error:.6f}")
+        
+        check(f"  Scenario '{desc}': empirical matches theory within 0.01",
+              error < 0.01,
+              f"Theory: {alpha_theory:.4f}, Empirical: {alpha_empirical:.4f}")
+        
+        # Also verify the "exchange rate" interpretation at the threshold:
+        # (1-α)/α should equal dt/dd
+        theory_ratio = dt / dd if dd > 0 else float('inf')
+        empirical_ratio = ((1 - alpha_empirical) / alpha_empirical 
+                           if alpha_empirical > 0 else float('inf'))
+        print(f"  Time/danger ratio at threshold: {theory_ratio:.4f}  "
+              f"(from (1-α)/α = {empirical_ratio:.4f})")
+        ratio_error = abs(theory_ratio - empirical_ratio)
+        check(f"  Scenario '{desc}': exchange rate (1-α)/α matches dt/dd",
+              ratio_error < 0.01,
+              f"Theory: {theory_ratio:.4f}, From α: {empirical_ratio:.4f}")
+        print()
+
+
+# =============================================================================
 # MAIN — Run all tests
 # =============================================================================
 
@@ -588,6 +940,8 @@ if __name__ == "__main__":
     test_big_graph()
     test_london_routes()
     test_alpha_comparison()
+    test_max_time_increase()
+    test_exchange_rate()
     
     # --- Final summary ---
     total = passed + failed
