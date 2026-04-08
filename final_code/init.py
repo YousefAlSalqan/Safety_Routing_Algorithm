@@ -1,0 +1,1 @@
+"""Map data package for TransportAI safety-aware routing."""
